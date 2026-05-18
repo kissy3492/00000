@@ -251,28 +251,62 @@ textarea { font-family: monospace; font-size: 12px; }
   min-width: 88px; max-width: 130px; text-align: center;
   position: relative; z-index: 1;
   font-size: 10px;
-  /* カードの高さを揃える: 最小高さを設定し、項目数が少なくても潰れない */
-  min-height: 44px;
+  /* カードの高さを揃える: 通常モードでは min-height を確保 */
+  min-height: 48px;
   display: flex; flex-direction: column; gap: 1px;
 }
+/* 通常モードでは詳細情報量を抑え、極端な高さ変動を避ける */
+.gen-cols .person-card .extra,
+.gen-cols .person-card .note-line {
+  max-height: 28px; overflow: hidden;
+}
+/* Excel版に近い氏名・続柄の主役強調 */
+.person-card .name-rel-row {
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  margin-bottom: 1px;
+}
 .person-card .name {
-  font-weight: bold; font-size: 11.5px; line-height: 1.25;
+  font-weight: bold; font-size: 12px; line-height: 1.2;
   color: #1c2025; word-break: break-all;
-  letter-spacing: 0.2px;
+  letter-spacing: 0.3px;
 }
 .person-card .rel {
-  font-size: 9.5px; color: #2a5d8f; font-weight: bold;
-  background: #e8eff7; padding: 1px 5px; border-radius: 2px;
-  display: inline-block; margin: 1px auto;
-  letter-spacing: 0.3px;
+  font-size: 10px; color: #2a5d8f; font-weight: bold;
+  background: #e8eff7; padding: 1px 6px; border-radius: 2px;
+  display: inline-block;
+  letter-spacing: 0.4px;
 }
 .person-card .dates { font-size: 9px; color: #455463; line-height: 1.3; }
 .person-card .heir-cat {
   font-size: 9px; font-weight: bold; color: #b03a2e;
-  margin-top: 2px;
+  margin-top: 1px;
 }
-.person-card .note-line { font-size: 8.5px; color: #5a6873; margin-top: 1px; }
-.person-card .extra { font-size: 8.5px; color: #455463; line-height: 1.3; margin-top: 1px; }
+.person-card .note-line {
+  font-size: 8.5px; color: #5a6873; margin-top: 1px;
+  /* 過剰な情報でカード高さが暴走しないように制限 */
+  max-height: 28px; overflow: hidden;
+}
+.person-card .extra {
+  font-size: 8.5px; color: #455463; line-height: 1.3; margin-top: 1px;
+  word-break: break-all;
+}
+.person-card .extra.parent-info {
+  color: #5a4f3a; background: #f7f1e5; padding: 1px 4px;
+  border-radius: 2px; margin: 1px auto; font-size: 9px;
+  border: 1px solid #e0d3b5;
+}
+
+/* カード密度プリセット — applyCardPreset で .card-preset-XXX を .gen-cols 等に付与 */
+.card-preset-minimum .person-card .dates,
+.card-preset-minimum .person-card .extra,
+.card-preset-minimum .person-card .note-line,
+.card-preset-minimum .person-card .heir-cat { display: none; }
+.card-preset-minimum .person-card { min-height: 36px; }
+
+/* A4 優先モード時はさらにコンパクト */
+.gen-cols.density-a4 .person-card { min-height: 42px; padding: 3px 5px; }
+.gen-cols.density-a4 .person-card .name { font-size: 11px; }
+.gen-cols.density-a4 .person-card .rel { font-size: 9px; padding: 0 4px; }
 
 .person-card .marks { margin-top: 3px; line-height: 1.4; }
 .mark {
@@ -281,6 +315,201 @@ textarea { font-family: monospace; font-size: 12px; }
   color: #fff; white-space: nowrap;
 }
 .mark-cohabit { background: #1e7e34; }
+
+/* ============ 横型 — 家族ブロック行方式（新方式）============ */
+/* 入力不足ガイドから「修正する」ボタンで行に移動した時の一時ハイライト */
+@keyframes rowHighlightPulse {
+  0%   { background-color: #fff8c5; }
+  100% { background-color: transparent; }
+}
+#personTable tbody tr.row-highlight {
+  animation: rowHighlightPulse 1.5s ease-out;
+  outline: 2px solid #d4a017;
+  outline-offset: -2px;
+}
+/* Excel貼付エリアの一時ハイライト */
+@keyframes tsvHighlightPulse {
+  0%   { box-shadow: 0 0 0 4px #fff8c5, 0 0 0 6px #d4a017; }
+  100% { box-shadow: 0 0 0 0 transparent, 0 0 0 0 transparent; }
+}
+.tsv-paste.tsv-highlight {
+  animation: tsvHighlightPulse 1.5s ease-out;
+}
+
+.gen-cols.layout-family-rows {
+  display: flex; flex-direction: column;
+  gap: 10px;
+  padding: 4px;
+}
+.gen-cols.layout-family-rows .gen-header-row,
+.gen-cols.layout-family-rows .family-row {
+  display: grid;
+  /* 親世代/被相続人世代/子世代/孫世代 の4列 — A4 でも収まる比率（デフォルト） */
+  grid-template-columns: minmax(96px, 0.9fr) minmax(120px, 1fr) minmax(130px, 1.15fr) minmax(120px, 1fr);
+  gap: 6px;
+  align-items: start;
+}
+/* 6列モード（詳細確認のみ）: 親 / 被相続人世代 / 子 / 孫 / 曾孫 / それ以下 */
+.gen-cols.layout-family-rows.col-count-6 .gen-header-row,
+.gen-cols.layout-family-rows.col-count-6 .family-row {
+  grid-template-columns:
+    minmax(88px, 0.85fr) minmax(110px, 0.95fr) minmax(120px, 1fr)
+    minmax(110px, 0.95fr) minmax(105px, 0.9fr) minmax(95px, 0.85fr);
+}
+/* 4列モードで孫セル内に出す「曾孫以降あり」の注記 */
+.gen-cols.layout-family-rows .fr-cell-extra-note {
+  font-size: 10px;
+  color: #8c2a1f;
+  background: #fef2ee;
+  border: 1px dashed #d99a91;
+  padding: 3px 6px;
+  border-radius: 3px;
+  margin-top: 4px;
+  text-align: center;
+  align-self: stretch;
+  line-height: 1.4;
+}
+@media print {
+  .gen-cols.layout-family-rows .fr-cell-extra-note {
+    color: #000 !important; background: #fff !important; border-color: #555 !important;
+  }
+}
+.gen-cols.layout-family-rows .gen-header-row {
+  margin-bottom: 4px;
+}
+.gen-cols.layout-family-rows .gen-header-row .gc-header {
+  text-align: center;
+  font-size: 11px; font-weight: bold;
+  background: #eef2f6;
+  border: 1px solid #c5cdd5;
+  border-radius: 3px;
+  padding: 5px 4px;
+  color: #2b3a4a;
+  letter-spacing: 0.4px;
+}
+.gen-cols.layout-family-rows .gen-header-row .gc-header.gc-decedent {
+  background: #fbecea;
+  border-color: #d99a91;
+  color: #8c2a1f;
+}
+.gen-cols.layout-family-rows .family-row {
+  background: #fbfcfd;
+  border: 1px solid #d8dee4;
+  border-radius: 5px;
+  padding: 8px 6px 6px;
+  position: relative;
+  margin-top: 0;
+}
+.gen-cols.layout-family-rows .family-row.fr-decedent {
+  background: #fef8f7;
+  border-color: #d99a91;
+}
+.gen-cols.layout-family-rows .family-row.fr-sibling {
+  background: #f5f8fb;
+  border-color: #c5cdd5;
+}
+.gen-cols.layout-family-rows .family-row.fr-orphan {
+  background: #fff8f5;
+  border: 1px dashed #d99a91;
+}
+.gen-cols.layout-family-rows .family-row-label {
+  position: absolute;
+  top: -8px; left: 8px;
+  font-size: 9.5px; font-weight: bold;
+  background: #fff;
+  border: 1px solid #c5cdd5;
+  padding: 1px 8px;
+  border-radius: 8px;
+  color: #2b3a4a;
+  letter-spacing: 0.3px;
+}
+.gen-cols.layout-family-rows .family-row.fr-decedent .family-row-label {
+  background: #fbecea; border-color: #d99a91; color: #8c2a1f;
+}
+.gen-cols.layout-family-rows .family-row.fr-orphan .family-row-label {
+  background: #fff8f5; border-color: #d99a91; color: #8c2a1f;
+}
+.gen-cols.layout-family-rows .fr-cell {
+  display: flex; flex-direction: column; gap: 6px;
+  align-items: center;
+  min-height: 32px;
+}
+.gen-cols.layout-family-rows .fr-cell-header {
+  font-size: 9.5px; color: #5a6873; font-weight: bold;
+  background: #f0f4f8;
+  border-left: 3px solid #2a5d8f;
+  padding: 2px 6px;
+  border-radius: 0 2px 2px 0;
+  align-self: stretch;
+  text-align: left;
+  margin-bottom: 2px;
+}
+.gen-cols.layout-family-rows .fr-decedent .fr-cell-decedent .fr-cell-header {
+  background: #fbecea; border-left-color: #b03a2e; color: #8c2a1f;
+}
+.gen-cols.layout-family-rows .fr-cell-empty {
+  min-height: 12px;
+}
+/* A4優先モードでは余白を更に詰める */
+.gen-cols.layout-family-rows.density-a4 .family-row { padding: 5px 4px 4px; gap: 4px; }
+.gen-cols.layout-family-rows.density-a4 .fr-cell-header { font-size: 9px; padding: 1px 4px; }
+.gen-cols.layout-family-rows.density-a4 .family-row-label { font-size: 9px; top: -7px; }
+/* 印刷時: 罫線をはっきり */
+@media print {
+  .gen-cols.layout-family-rows .family-row { border-color: #555; background: #fff !important; }
+  .gen-cols.layout-family-rows .family-row.fr-decedent { border-color: #b03a2e; }
+  .gen-cols.layout-family-rows .family-row-label {
+    background: #fff !important; color: #000 !important; border-color: #555 !important;
+  }
+  .gen-cols.layout-family-rows .gen-header-row .gc-header { background: #fff !important; color: #000 !important; }
+}
+
+/* 子世代・孫世代・曾孫世代内の親子グループ間 サブヘッダー（被相続人の子/兄弟姉妹の子/etc.）*/
+.gc-subheader {
+  font-size: 9.5px; color: #5a6873; font-weight: bold;
+  background: #f0f4f8; border-left: 3px solid #2a5d8f;
+  padding: 2px 6px; margin: 4px 0 2px;
+  border-radius: 0 2px 2px 0;
+  letter-spacing: 0.3px;
+}
+.gen-col.gc-decedent .gc-subheader {
+  background: #fbecea; border-left-color: #b03a2e; color: #8c2a1f;
+}
+
+/* 家族ブロック: 同じ親ユニットに属する婚姻グループをまとめる視覚単位。
+   ・各ブロック内: 小見出し（family-block-header）＋ 1つ以上の婚姻グループ
+   ・ブロック間: 余白＋点線罫線で区切り、別系統の子と混ざって見えないように
+   ・親情報未設定の場合（fb-no-parent）: オレンジ枠で警告 */
+.family-block {
+  display: flex; flex-direction: column;
+  gap: 6px;
+  padding: 4px 2px;
+  border-radius: 3px;
+}
+.family-block + .family-block {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px dashed #c5cdd5;
+}
+.family-block-header {
+  font-size: 9.5px; color: #2b3a4a; font-weight: bold;
+  background: #eaf0f6; border-left: 3px solid #2a5d8f;
+  padding: 3px 6px; margin: 0;
+  border-radius: 0 2px 2px 0;
+  letter-spacing: 0.3px;
+  line-height: 1.3;
+}
+.family-block.fb-no-parent {
+  border: 1px dashed #d99a91; background: #fff8f5;
+  padding: 4px;
+}
+.family-block-header.fb-warn {
+  background: #fbecea; border-left-color: #b03a2e; color: #8c2a1f;
+}
+/* 被相続人世代列内の family-block ヘッダは赤系（被相続人グループの強調） */
+.gen-col.gc-decedent .family-block-header {
+  background: #fbecea; border-left-color: #b03a2e; color: #8c2a1f;
+}
 .mark-cohabit-candidate { background: #b88600; }
 .mark-recent { background: #d35400; }
 .mark-renounce { background: #c0392b; }
@@ -801,29 +1030,56 @@ textarea { font-family: monospace; font-size: 12px; }
   <!-- ========== Tab 2: Persons ========== -->
   <div class="tab-content" id="tab-persons">
     <h2>人物情報</h2>
-    <div class="help">
-      <strong>続柄に「被相続人」と入力した人物</strong>が相続関係図の中心に表示されます。<br>
-      性別: 男/女/不明 ・ 相続放棄/養子: <code>1</code>=該当 ・ 父ID/母ID/配偶者ID: 人物IDで参照<br>
-      相続区分の例: 配偶者・子・直系尊属・兄弟姉妹・代襲相続人・該当なし<br>
-      相続不能理由: なし / 死亡 / 放棄 / 欠格 / 廃除 （代襲判定に使用）<br>
-      表示順: 数値（同世代列内の並び順）・空欄なら入力順<br>
-      表示世代列: 自動 / 親世代 / 被相続人世代 / 子世代 / 孫世代 / 曾孫世代 / それ以下<br>
-      関係メモ: 前配偶者・後配偶者・前婚の子・連れ子・養親 などの関係を自由記述
+    <!-- 初心者向け案内 -->
+    <div class="help" style="margin-bottom:8px; padding:8px 12px; background:#eaf2f8; border-left:4px solid #2a5d8f; font-size:12px; color:#1c2025; border-radius:0 3px 3px 0;">
+      <strong style="font-size:12.5px; color:#1f3a5a;">📋 入力ガイド</strong><br>
+      まず<strong>被相続人</strong>を入力し、次に配偶者・子を登録してください。
+      <strong>「家族を追加」ウィザード</strong>を使うと、続柄や親IDが自動設定されて簡単です。<br>
+      Excel貼付の場合は<strong>簡易TSV（9列）</strong>を使用してください（続柄から相続区分を自動推定）。
     </div>
-    <div class="input-mode-toolbar">
-      <label class="checkbox-label">
-        <input type="checkbox" id="showDetailColumns"> 詳細入力欄を表示（相続判定・補助情報の列）
-      </label>
-      <span style="font-size:11px; color:#455463;">
-        基本情報: ID/氏名/続柄/性別/生年月日/死亡日/父ID/母ID/配偶者ID ／
-        相続判定: 相続区分/放棄/養子/相続不能理由/表示順/表示世代列 ／
-        補助情報: 関係メモ/備考/職業/本籍/筆頭者/戸籍メモ/現住所/相続開始日時点住所
+    <!-- 入力不足ガイド: 親ID未設定の子・孫・甥姪、片側だけの配偶者ID 等を集約表示 -->
+    <div id="inputValidationGuide" class="help" style="display:none; margin:-4px 0 8px; padding:8px 12px; background:#fff8f5; border-left:4px solid #d35400; font-size:12px; color:#6b3a18; border-radius:0 3px 3px 0;"></div>
+    <!-- 主操作: 家族を追加ウィザード / 行追加 / 全クリア -->
+    <div class="toolbar" style="margin-bottom:6px;">
+      <button class="btn btn-success" onclick="showFamilyWizard()" style="font-weight:bold;">👪 家族を追加</button>
+      <button class="btn" onclick="scrollToTSVPaste()" style="font-weight:bold; background:#2a5d8f;">📋 Excelから貼付</button>
+      <button class="btn" onclick="addPersonRow()">＋ 行追加（空白行）</button>
+      <button class="btn btn-danger" onclick="clearPersons()">全クリア</button>
+      <span style="font-size:11px; color:#5a6873; margin-left:8px;">
+        ※ 家族を追加: ウィザード形式 ／ Excelから貼付: 簡易9列TSVを推奨
       </span>
     </div>
-    <div class="toolbar">
-      <button class="btn" onclick="addPersonRow()">＋ 行追加</button>
-      <button class="btn btn-danger" onclick="clearPersons()">全クリア</button>
-    </div>
+    <!-- 詳細入力欄トグル -->
+    <details class="collapsible-section" style="margin: 6px 0;">
+      <summary>詳細入力欄の切替（相続判定・補助情報の列を表示）</summary>
+      <div class="cs-body">
+        <div class="input-mode-toolbar" style="border:none; padding:0;">
+          <label class="checkbox-label">
+            <input type="checkbox" id="showDetailColumns"> 詳細入力欄を表示（相続判定・補助情報の列）
+          </label>
+          <span style="font-size:11px; color:#455463;">
+            基本情報: ID/氏名/続柄/性別/生年月日/死亡日/父ID/母ID/配偶者ID ／
+            相続判定: 相続区分/放棄/養子/相続不能理由/表示順/表示世代列 ／
+            補助情報: 関係メモ/備考/職業/本籍/筆頭者/戸籍メモ/現住所/相続開始日時点住所
+          </span>
+        </div>
+      </div>
+    </details>
+    <!-- 折りたたみ: 入力フィールドの説明 -->
+    <details class="collapsible-section" style="margin: 6px 0;">
+      <summary>入力フィールドの説明（続柄・相続区分・表示順 などの詳細）</summary>
+      <div class="cs-body">
+        <div class="help" style="margin:0;">
+          <strong>続柄に「被相続人」と入力した人物</strong>が相続関係図の中心に表示されます。<br>
+          性別: 男/女/不明 ・ 相続放棄/養子: <code>1</code>=該当 ・ 父ID/母ID/配偶者ID: 人物IDで参照<br>
+          相続区分の例: 配偶者・子・直系尊属・兄弟姉妹・代襲相続人・該当なし<br>
+          相続不能理由: なし / 死亡 / 放棄 / 欠格 / 廃除 （代襲判定に使用）<br>
+          表示順: 数値（同世代列内の並び順）・空欄なら入力順<br>
+          表示世代列: 自動 / 親世代 / 被相続人世代 / 子世代 / 孫世代 / 曾孫世代 / それ以下<br>
+          関係メモ: 前配偶者・後配偶者・前婚の子・連れ子・養親 などの関係を自由記述
+        </div>
+      </div>
+    </details>
     <details class="collapsible-section" style="margin: 6px 0;">
       <summary>開発・テスト用（サンプルデータ・テストケース投入）</summary>
       <div class="cs-body">
@@ -837,15 +1093,24 @@ textarea { font-family: monospace; font-size: 12px; }
         </div>
       </div>
     </details>
-    <div class="toolbar" style="margin-top:-4px; padding:6px 8px; background:#f4f6f8; border:1px solid #d0d7de; border-radius:3px;">
-      <span style="font-size:11px; color:#455463; font-weight:bold; margin-right:4px;">入力補助:</span>
-      <button class="btn btn-small" onclick="quickAdd('decedent')">＋被相続人</button>
-      <button class="btn btn-small" onclick="quickAdd('spouse')">＋配偶者</button>
-      <button class="btn btn-small" onclick="quickAdd('child')">＋子</button>
-      <button class="btn btn-small" onclick="quickAdd('grandchild')">＋孫</button>
-      <button class="btn btn-small" onclick="quickAdd('sibling')">＋兄弟姉妹</button>
-      <span style="font-size:10px; color:#888;">（種別に応じて続柄・相続区分・表示世代列・親IDの初期値を自動設定）</span>
-    </div>
+    <details class="collapsible-section" style="margin: 6px 0;">
+      <summary>入力補助詳細（カテゴリ別の素早い追加ボタン）</summary>
+      <div class="cs-body">
+        <div style="font-size:11px; color:#5a6873; margin-bottom:6px;">
+          ※ より詳細な入力ウィザードは画面上部の「家族を追加」ボタンから利用できます。
+        </div>
+        <div class="opt-row" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+          <button class="btn btn-small" onclick="quickAdd('decedent')">＋被相続人</button>
+          <button class="btn btn-small" onclick="quickAdd('spouse')">＋配偶者</button>
+          <button class="btn btn-small" onclick="quickAdd('child')">＋子</button>
+          <button class="btn btn-small" onclick="quickAdd('grandchild')">＋孫</button>
+          <button class="btn btn-small" onclick="quickAdd('sibling')">＋兄弟姉妹</button>
+        </div>
+        <div style="font-size:11px; color:#5a6873; margin-top:6px;">
+          ※ 種別に応じて続柄・相続区分・表示世代列・親IDの初期値を自動設定します。
+        </div>
+      </div>
+    </details>
     <div class="tbl-scroll">
     <table class="editable-table person-table-grouped" id="personTable">
       <thead>
@@ -878,24 +1143,24 @@ textarea { font-family: monospace; font-size: 12px; }
       <tbody></tbody>
     </table>
     </div>
-    <details>
+    <details id="personTSVDetails">
       <summary>Excelから貼付（タブ区切り）</summary>
       <div class="help" style="margin-bottom:6px;">
         <label class="checkbox-label" style="margin-right:12px;">
-          <input type="radio" name="personTSVMode" value="full" checked> 詳細TSV（23列）
+          <input type="radio" name="personTSVMode" value="simple" checked> 簡易TSV（9列・推奨）
         </label>
         <label class="checkbox-label">
-          <input type="radio" name="personTSVMode" value="simple"> 簡易TSV（9列）
+          <input type="radio" name="personTSVMode" value="full"> 詳細TSV（23列）
         </label>
       </div>
-      <div class="help" id="personTSVHelpFull">
+      <div class="help" id="personTSVHelpSimple">
+        <strong>簡易TSV列順（9列・推奨）:</strong> ID, 氏名, 続柄, 性別, 生年月日, 死亡日, 父ID, 母ID, 配偶者ID
+        <br>※ 続柄から相続区分を自動推定します（配偶者→配偶者、長男・長女・養子等→子、父・母→直系尊属、兄・弟・姉・妹→兄弟姉妹、代襲を含む続柄→代襲相続人）。推定できない場合は空欄になります。<strong>推定結果はエラー一覧の警告で確認できます。</strong>
+        <br>※ 放棄・養子・相続不能理由・表示順・表示世代列・関係メモ・備考・職業・本籍・筆頭者・戸籍メモ・現住所・相続開始日時点住所は空欄で取り込まれます（後で個別に設定可能）。
+      </div>
+      <div class="help" id="personTSVHelpFull" style="display:none;">
         <strong>詳細TSV列順（23列）:</strong> ID, 氏名, 続柄, 性別, 生年月日, 死亡日, 父ID, 母ID, 配偶者ID, 相続区分, 放棄, 養子, 相続不能理由, 表示順, 表示世代列, 関係メモ, 備考, <strong>職業, 本籍, 筆頭者, 戸籍メモ, 現住所, 相続開始日時点住所</strong>
         <br>※ 後方互換: 旧17列（職業以降の6列なし）の貼付も受け付けます。
-      </div>
-      <div class="help" id="personTSVHelpSimple" style="display:none;">
-        <strong>簡易TSV列順（9列）:</strong> ID, 氏名, 続柄, 性別, 生年月日, 死亡日, 父ID, 母ID, 配偶者ID
-        <br>※ 簡易TSVでは、続柄から相続区分を自動推定します（配偶者→配偶者、長男・長女・養子等→子、父・母→直系尊属、兄・弟・姉・妹→兄弟姉妹、代襲を含む続柄→代襲相続人）。推定できない場合は空欄になります。<strong>推定結果は必ず確認してください。</strong>
-        <br>※ 放棄・養子・相続不能理由・表示順・表示世代列・関係メモ・備考・職業・本籍・筆頭者・戸籍メモ・現住所・相続開始日時点住所は空欄で取り込まれます（後で個別に設定可能）。
       </div>
       <textarea class="tsv-paste" id="personTSV" placeholder="Excelで該当範囲を選択し Ctrl+C → ここに貼付"></textarea>
       <button class="btn" onclick="importTSV('person')">取込</button>
@@ -1032,10 +1297,24 @@ textarea { font-family: monospace; font-size: 12px; }
             </label>
             <label class="checkbox-label">
               横型表示密度:
-              <select id="genColDensity">
+              <select id="genColDensity" onchange="if(typeof refreshPreview==='function')refreshPreview()">
                 <option value="standard">標準</option>
                 <option value="a4" selected>A4優先（圧縮）</option>
                 <option value="detail">詳細（余白広め）</option>
+              </select>
+            </label>
+            <label class="checkbox-label">
+              横型レイアウト:
+              <select id="genColLayoutMode" onchange="if(typeof refreshPreview==='function')refreshPreview()">
+                <option value="familyRows" selected>家族ブロック行（推奨）</option>
+                <option value="genCols">世代列方式（旧）</option>
+              </select>
+            </label>
+            <label class="checkbox-label">
+              列数:
+              <select id="genColColumnCount" onchange="if(typeof refreshPreview==='function')refreshPreview()">
+                <option value="4" selected>4列（親/被相続人/子/孫 — 通常・印刷）</option>
+                <option value="6">6列（親/被/子/孫/曾孫/それ以下 — 詳細確認）</option>
               </select>
             </label>
             <label class="checkbox-label">
@@ -1053,6 +1332,19 @@ textarea { font-family: monospace; font-size: 12px; }
       <summary>カード表示項目（氏名・続柄・年齢/享年・重要マークは常時表示）</summary>
       <div class="cs-body">
         <div class="option-fieldset">
+          <div class="opt-row" style="align-items:center; padding-bottom:6px; border-bottom:1px dashed #d0d7de; margin-bottom:8px;">
+            <label class="checkbox-label strong" style="font-weight:bold;">
+              カード密度プリセット:
+              <select id="cardPreset" onchange="applyCardPreset(this.value)" style="margin-left:4px;">
+                <option value="minimum">最小（氏名＋続柄のみ）</option>
+                <option value="standard" selected>標準（氏名＋続柄＋年齢/享年＋重要マーク）</option>
+                <option value="detail">詳細（標準＋職業＋住所＋親情報）</option>
+                <option value="kosekiCheck">戸籍確認（標準＋本籍＋筆頭者＋戸籍メモ）</option>
+                <option value="custom">カスタム（下のチェック個別）</option>
+              </select>
+            </label>
+            <span style="font-size:10.5px; color:#5a6873;">プリセットを切り替えるとカード表示項目が一括変更されます</span>
+          </div>
           <div class="opt-row">
             <label class="checkbox-label"><input type="checkbox" id="optHeirCat"> 相続区分</label>
             <label class="checkbox-label"><input type="checkbox" id="optBirth"> 生年月日</label>
@@ -1068,8 +1360,8 @@ textarea { font-family: monospace; font-size: 12px; }
             <label class="checkbox-label"><input type="checkbox" id="optRelMemo"> 関係メモ</label>
           </div>
           <div style="font-size:10.5px; color:#5a6873; margin-top:6px;">
-            ※ 初期表示は最小限（氏名・続柄・年齢/享年・重要マーク）。必要に応じてチェックを入れて詳細表示に切替えてください。<br>
-            ※ 「住所」は相続開始日時点住所（住所履歴から自動算出を優先、無ければ人物情報の「相続開始日時点住所」を表示）。
+            ※ 初期表示は最小限（氏名・続柄・年齢/享年・重要マーク）。必要に応じてプリセット切替か個別チェックで詳細表示に切替えてください。<br>
+            ※ 「住所」は相続開始日時点住所（住所履歴から自動算出を優先、無ければ人物情報の「相続開始日時点住所」を表示）。<strong>夫婦で同住所の場合、配偶者カード側は「配偶者と同じ」と簡略表示します。</strong>
           </div>
         </div>
       </div>
@@ -1079,16 +1371,31 @@ textarea { font-family: monospace; font-size: 12px; }
       <summary>関係線（人物カード同士を直交線で接続）</summary>
       <div class="cs-body">
         <div class="option-fieldset">
+          <div class="opt-row" style="align-items:center; padding-bottom:6px; border-bottom:1px dashed #d0d7de; margin-bottom:8px;">
+            <label class="checkbox-label strong" style="font-weight:bold;">
+              関係線モード:
+              <select id="lineMode" onchange="applyLineMode(this.value)" style="margin-left:4px;">
+                <option value="all">全線表示</option>
+                <option value="majorOnly" selected>主要人物のみ</option>
+                <option value="parentOnly">親子線のみ</option>
+                <option value="marriageOnly">婚姻線のみ</option>
+                <option value="none">線なし</option>
+                <option value="custom">カスタム（下のチェック個別）</option>
+              </select>
+            </label>
+            <span style="font-size:10.5px; color:#5a6873;">モードを切り替えると下のチェックが一括変更されます</span>
+          </div>
           <div class="opt-row">
             <label class="checkbox-label"><input type="checkbox" id="showRelLines" checked> 関係線を表示</label>
             <label class="checkbox-label"><input type="checkbox" id="showMarriageLines" checked> 婚姻線を表示</label>
             <label class="checkbox-label"><input type="checkbox" id="showParentLines" checked> 親子線を表示</label>
             <label class="checkbox-label"><input type="checkbox" id="simpleLineMode" checked> 簡易線モード</label>
+            <label class="checkbox-label"><input type="checkbox" id="showMajorOnlyLines"> 主要人物のみ線表示</label>
           </div>
           <div style="font-size:10.5px; color:#5a6873; margin-top:6px;">
             ※ 関係線は水平線・垂直線のみで描画します（斜め線なし）。
             婚姻線=実線太め／親子線=実線／代襲関係線=破線／養子関係線（特殊破線）=破線多段。簡易線モードでは線種を統一して情報量を抑えます。
-            A4優先モードでは自動的に簡易線扱いになります。
+            A4優先モードでは自動的に簡易線扱いになります。「主要人物のみ」は被相続人＋配偶者＋直系の子・代襲相続人に絞ります。
           </div>
         </div>
       </div>
@@ -1441,6 +1748,129 @@ function syncPersonsFromTable() {
     if (!empty) state.persons.push(p);
   });
   updateErrorBadge();
+  // 入力不足ガイドを更新（人物情報タブ上部の橙ボックス）
+  if (typeof refreshInputValidationGuide === 'function') refreshInputValidationGuide();
+}
+
+/* ============================================================
+   入力不足ガイド（人物情報タブ上部のオレンジ枠）
+   ------------------------------------------------------------
+   親IDが未設定の子・孫・甥姪、片側だけの配偶者ID、兄弟姉妹なのに父母IDが
+   被相続人と一致しないケースをまとめて表示する。
+   エラー一覧（タブ6）には残しつつ、ユーザーがすぐ気づけるよう人物情報タブにも反映。
+============================================================ */
+function refreshInputValidationGuide() {
+  const box = document.getElementById('inputValidationGuide');
+  if (!box) return;
+  const warnings = collectInputWarnings();
+  if (warnings.length === 0) {
+    box.style.display = 'none';
+    box.innerHTML = '';
+    return;
+  }
+  box.style.display = '';
+  // 各警告に「修正する」ボタンを付与 — 該当行へスクロール＋一時ハイライト
+  const lis = warnings.slice(0, 10).map(w => {
+    const personId = w.personId || '';
+    const text = _escapeHtml(w.text || '');
+    const btn = personId
+      ? '<button type="button" class="btn btn-small" style="margin-left:6px; padding:1px 8px; font-size:10.5px;" '
+        + 'onclick="scrollToPersonRow(\'' + _escapeHtml(personId) + '\')">修正する</button>'
+      : '';
+    return '<li>' + text + btn + '</li>';
+  }).join('');
+  const more = warnings.length > 10
+    ? '<li>… ほか ' + (warnings.length - 10) + ' 件（エラー一覧タブで確認）</li>'
+    : '';
+  box.innerHTML = '<strong>⚠ 入力不足ガイド（' + warnings.length + ' 件）</strong>'
+    + '<ul style="margin:4px 0 0; padding-left:18px;">' + lis + more + '</ul>';
+}
+
+function collectInputWarnings() {
+  // 返り値: 配列 [{ personId, text }]
+  const warnings = [];
+  const dec = findDecedent();
+  const idMap = new Map(state.persons.map(p => [p.id, p]));
+  state.persons.forEach(p => {
+    if (!p.id) return;
+    const display = (p.id || '') + ' ' + (p.name || '(無名)') + ' [' + (p.relation || '?') + ']';
+    const rel = p.relation || '';
+    // 子・孫・甥姪に親ID未設定
+    if (/^(子|長男|次男|二男|三男|四男|長女|次女|二女|三女|四女|養子|養女)$/.test(rel)) {
+      if (!p.fatherId && !p.motherId) {
+        warnings.push({ personId: p.id, text: display + ': 子の親ID（父ID・母ID）が未設定です' });
+      }
+    }
+    if (/^(孫|甥|姪)/.test(rel)) {
+      if (!p.fatherId && !p.motherId) {
+        warnings.push({ personId: p.id, text: display + ': ' + rel + ' の親ID（父ID・母ID）が未設定です' });
+      }
+    }
+    // 配偶者IDが片側だけ / 不整合
+    if (p.spouseId) {
+      const partner = idMap.get(p.spouseId);
+      if (!partner) {
+        warnings.push({ personId: p.id, text: display + ': 配偶者ID「' + p.spouseId + '」に該当する人物がいません' });
+      } else if (partner.spouseId && partner.spouseId !== p.id) {
+        warnings.push({ personId: p.id, text: display + ': 配偶者ID（' + p.spouseId + '）の相手側の配偶者ID（' + partner.spouseId + '）が一致しません' });
+      } else if (!partner.spouseId) {
+        warnings.push({ personId: partner.id, text: (partner.id + ' ' + (partner.name||'(無名)') + ' [' + (partner.relation||'?') + ']') + ': 配偶者IDが片側のみです（相手側 ' + p.id + ' から参照されています）' });
+      }
+    }
+    // 兄弟姉妹なのに父母IDが被相続人と一致しない
+    if (dec && p.id !== dec.id && /^(兄|弟|姉|妹|兄弟姉妹)$/.test(rel)) {
+      const sameFa = (p.fatherId && dec.fatherId && p.fatherId === dec.fatherId);
+      const sameMo = (p.motherId && dec.motherId && p.motherId === dec.motherId);
+      if (!sameFa && !sameMo) {
+        warnings.push({ personId: p.id, text: display + ': 兄弟姉妹は被相続人と同じ父母IDが必要です（被相続人 父=' + (dec.fatherId || '未') + ' 母=' + (dec.motherId || '未') + '）' });
+      }
+    }
+  });
+  return warnings;
+}
+
+/* 該当人物の行までスクロール＋一時ハイライト */
+function scrollToPersonRow(personId) {
+  if (!personId) return;
+  const personsTabBtn = document.querySelector('button[data-tab="persons"]');
+  if (personsTabBtn) personsTabBtn.click();
+  setTimeout(() => {
+    const tbody = document.querySelector('#personTable tbody');
+    if (!tbody) return;
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    const target = rows.find(tr => {
+      const idInput = tr.querySelector('input[data-field="id"]');
+      return idInput && idInput.value === personId;
+    });
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.classList.add('row-highlight');
+    setTimeout(() => target.classList.remove('row-highlight'), 1800);
+  }, 100);
+}
+
+/* Excel貼付欄を開いて貼付テキストエリアへスクロール（仕様 #4） */
+function scrollToTSVPaste() {
+  const personsTabBtn = document.querySelector('button[data-tab="persons"]');
+  if (personsTabBtn) personsTabBtn.click();
+  setTimeout(() => {
+    const details = document.getElementById('personTSVDetails');
+    if (details) details.open = true;
+    const ta = document.getElementById('personTSV');
+    if (ta) {
+      ta.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      ta.focus();
+      // 入力用の視覚的ガイド: 1.5秒間ハイライト
+      ta.classList.add('tsv-highlight');
+      setTimeout(() => ta.classList.remove('tsv-highlight'), 1500);
+    }
+  }, 100);
+}
+
+function _escapeHtml(s) {
+  return (s == null ? '' : String(s))
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function addPersonRow(data) {
@@ -1504,6 +1934,7 @@ function addPersonRow(data) {
         ctrl.value = data[f] || '';
       }
     }
+    ctrl.dataset.field = f;
     ctrl.addEventListener('input', syncPersonsFromTable);
     ctrl.addEventListener('change', syncPersonsFromTable);
     td.appendChild(ctrl);
@@ -2003,6 +2434,1248 @@ function showModalDecision(opts) {
   setTimeout(() => okBtn.focus(), 0);
 }
 
+/* ============================================================
+   家族を追加 ウィザード
+   ------------------------------------------------------------
+   8カテゴリの追加メニュー → カテゴリ別の入力フォーム → state.persons へ反映。
+
+   設計方針:
+   - 1ファイル単一HTML制約のため、ネイティブダイアログを使わない自作モーダル。
+   - 既存の showInToolSelectionModal / showModalNotice と同じ overlay 構造を踏襲。
+   - 「子をまとめて追加」等の連続追加では、保存後に同フォームをリセット表示し、
+     ユーザーが「もう一人追加」「完了」を選べるようにする。
+   - 親IDの自動推定:
+     ・子/兄弟姉妹: 被相続人の父母IDを使う（兄弟姉妹は被相続人と同じ父母）
+     ・孫/甥姪: 親選択モーダルで対象を選び、その人物の fatherId/motherId を使う
+============================================================ */
+function showFamilyWizard() {
+  const items = [
+    { value: 'setDecedentSet', label: '◎ 家族セット: 被相続人＋配偶者＋子をまとめて登録' },
+    { value: 'setDeceasedChildSet', label: '◎ 家族セット: 先死亡子＋代襲孫をまとめて登録' },
+    { value: 'decedent',    label: '① 被相続人を追加' },
+    { value: 'spouse',      label: '② 配偶者を追加（被相続人の配偶者）' },
+    { value: 'children',    label: '③ 子をまとめて追加' },
+    { value: 'childSpouse', label: '④ 子の配偶者を追加' },
+    { value: 'grandchild',  label: '⑤ 孫を追加' },
+    { value: 'parents',     label: '⑥ 父母を追加（被相続人の父母）' },
+    { value: 'siblings',    label: '⑦ 兄弟姉妹をまとめて追加' },
+    { value: 'nephew',      label: '⑧ 甥姪を追加' }
+  ];
+  showInToolSelectionModal({
+    title: '👪 家族を追加 — カテゴリを選択',
+    desc: '家族セット登録: 被相続人・配偶者・子等を1画面で登録／個別追加: 1カテゴリずつ追加',
+    items: items,
+    onDecision: (val) => runWizardStep(val)
+  });
+}
+
+function runWizardStep(category) {
+  const dec = findDecedent();
+
+  // 家族セット登録: 被相続人＋配偶者＋子をまとめて登録（被相続人未登録でもOK）
+  if (category === 'setDecedentSet') {
+    showFamilySetDecedentSpouseChildrenModal();
+    return;
+  }
+  // 家族セット登録: 先死亡子＋代襲孫をまとめて登録（被相続人必要）
+  if (category === 'setDeceasedChildSet') {
+    if (!dec) {
+      showModalNotice({
+        title: '被相続人未登録',
+        message: '先死亡子＋代襲孫の登録には被相続人が必要です。先に「① 被相続人を追加」を実行してください。',
+        severity: 'warn'
+      });
+      return;
+    }
+    showFamilySetDeceasedChildModal();
+    return;
+  }
+
+  if ((category === 'spouse' || category === 'children' || category === 'parents' ||
+       category === 'siblings') && !dec) {
+    showModalNotice({
+      title: '被相続人未登録',
+      message: '被相続人がまだ登録されていません。先に「① 被相続人を追加」を実行してください。',
+      severity: 'warn'
+    });
+    return;
+  }
+  if (category === 'decedent') {
+    showWizardFormModal({
+      title: '① 被相続人を追加',
+      defaults: { relation: '被相続人', gender: '男' },
+      relationOptions: ['被相続人'],
+      allowMultiple: false,
+      onSave: (rec) => {
+        const id = _wizardNextId();
+        addPersonRow(Object.assign({
+          id, heirCategory: '', genColumn: '被相続人世代',
+          displayOrder: _wizardNextOrder(), blockReason: 'なし'
+        }, rec));
+      }
+    });
+    return;
+  }
+  if (category === 'spouse') {
+    showWizardFormModal({
+      title: '② 配偶者を追加',
+      defaults: { relation: '妻', gender: '女' },
+      relationOptions: ['妻', '夫', '配偶者'],
+      allowMultiple: false,
+      onSave: (rec) => {
+        const id = _wizardNextId();
+        // 配偶者IDの相互参照
+        addPersonRow(Object.assign({
+          id, heirCategory: '配偶者', genColumn: '被相続人世代',
+          displayOrder: _wizardNextOrder(),
+          spouseId: dec ? dec.id : '', blockReason: 'なし'
+        }, rec));
+        // 被相続人側にも spouseId を補完
+        if (dec && !dec.spouseId) {
+          dec.spouseId = id;
+          _wizardRefreshTableRows();
+        }
+      }
+    });
+    return;
+  }
+  if (category === 'children') {
+    const spouseId = _wizardFindDecedentSpouse();
+    let fa = '', mo = '';
+    if (dec.gender === '男' || dec.gender === '不明' || !dec.gender) { fa = dec.id; mo = spouseId; }
+    else { mo = dec.id; fa = spouseId; }
+    showWizardBulkTableModal({
+      title: '③ 子をまとめて追加',
+      message: '父ID=' + (fa || '(未設定)') + ' / 母ID=' + (mo || '(未設定)') + ' を自動設定します。' +
+               '表に複数行を入力して「まとめて保存」を押してください。',
+      defaultRelation: '長男',
+      defaultGender: '男',
+      relationOptions: ['長男', '二男', '三男', '四男', '長女', '二女', '三女', '四女', '養子', '養女', '子'],
+      onSaveRow: (rec) => {
+        const id = _wizardNextId();
+        addPersonRow(Object.assign({
+          id, heirCategory: '子', genColumn: '子世代',
+          displayOrder: _wizardNextOrder(),
+          fatherId: fa, motherId: mo
+        }, rec));
+      }
+    });
+    return;
+  }
+  if (category === 'parents') {
+    showWizardBulkTableModal({
+      title: '⑥ 父母を追加',
+      message: '父・母を表に入力して「まとめて保存」を押してください。被相続人の fatherId/motherId を自動設定します。',
+      defaultRelation: '父',
+      defaultGender: '男',
+      relationOptions: ['父', '母'],
+      onSaveRow: (rec) => {
+        const id = _wizardNextId();
+        addPersonRow(Object.assign({
+          id, heirCategory: '', genColumn: '親世代',
+          displayOrder: _wizardNextOrder()
+        }, rec));
+        if (rec.relation === '父' && dec && !dec.fatherId) { dec.fatherId = id; _wizardRefreshTableRows(); }
+        else if (rec.relation === '母' && dec && !dec.motherId) { dec.motherId = id; _wizardRefreshTableRows(); }
+      }
+    });
+    return;
+  }
+  if (category === 'siblings') {
+    const fa = dec.fatherId || '';
+    const mo = dec.motherId || '';
+    if (!fa && !mo) {
+      showModalNotice({
+        title: '被相続人の父母ID未設定',
+        message: '兄弟姉妹を追加する前に、被相続人の父ID・母IDを設定してください。\n「⑥ 父母を追加」で父母を登録すると自動設定されます。',
+        severity: 'warn'
+      });
+      return;
+    }
+    showWizardBulkTableModal({
+      title: '⑦ 兄弟姉妹をまとめて追加',
+      message: '父ID=' + (fa || '(未)') + ' / 母ID=' + (mo || '(未)') + ' を自動設定します。' +
+               '表に複数行を入力して「まとめて保存」を押してください。',
+      defaultRelation: '兄',
+      defaultGender: '男',
+      relationOptions: ['兄', '弟', '姉', '妹', '長兄', '次兄', '長姉', '次姉', '兄弟姉妹'],
+      onSaveRow: (rec) => {
+        const id = _wizardNextId();
+        addPersonRow(Object.assign({
+          id, heirCategory: '兄弟姉妹', genColumn: '被相続人世代',
+          displayOrder: _wizardNextOrder(),
+          fatherId: fa, motherId: mo
+        }, rec));
+      }
+    });
+    return;
+  }
+  if (category === 'grandchild' || category === 'nephew' || category === 'childSpouse') {
+    // 親選択モーダル: 子世代の人物（孫/子の配偶者）or 兄弟姉妹（甥姪）の中から
+    let parentCandidates;
+    if (category === 'grandchild') {
+      // 親候補: 被相続人の直系の子
+      parentCandidates = state.persons.filter(p =>
+        (p.fatherId === dec.id || p.motherId === dec.id) && p.id !== dec.id
+      );
+    } else if (category === 'childSpouse') {
+      // 親候補: 被相続人の直系の子（その人の配偶者を追加）
+      parentCandidates = state.persons.filter(p =>
+        (p.fatherId === dec.id || p.motherId === dec.id) && p.id !== dec.id
+      );
+    } else {
+      // nephew: 被相続人の兄弟姉妹（heirCategory='兄弟姉妹' または relation で兄/弟/姉/妹）
+      parentCandidates = state.persons.filter(p => {
+        if (!dec) return false;
+        if (p.id === dec.id) return false;
+        const sameParents = dec.fatherId && (p.fatherId === dec.fatherId || p.motherId === dec.fatherId)
+                         || dec.motherId && (p.fatherId === dec.motherId || p.motherId === dec.motherId);
+        return sameParents;
+      });
+    }
+    if (parentCandidates.length === 0) {
+      showModalNotice({
+        title: '親候補なし',
+        message: category === 'grandchild' ? '孫を追加するには、まず子を登録してください。'
+              : category === 'childSpouse' ? '子の配偶者を追加するには、まず子を登録してください。'
+              : '甥姪を追加するには、まず兄弟姉妹を登録してください。',
+        severity: 'warn'
+      });
+      return;
+    }
+    const parentOptions = parentCandidates.map(p => ({
+      value: p.id,
+      label: p.id + ': ' + (p.name || '(無名)') + ' [' + (p.relation || '?') + ']'
+    }));
+    showInToolSelectionModal({
+      title: (category === 'grandchild' ? '⑤ 孫を追加 — 親を選択'
+            : category === 'childSpouse' ? '④ 子の配偶者を追加 — 配偶元の子を選択'
+            : '⑧ 甥姪を追加 — 親（兄弟姉妹）を選択'),
+      desc: '対象の親を選んでください。父ID・母IDは選択した親（と、その配偶者がいれば配偶者も）から自動設定されます。',
+      items: parentOptions,
+      onDecision: (parentId) => {
+        const parent = state.persons.find(x => x.id === parentId);
+        if (!parent) return;
+        // 親の配偶者を引いて両親IDを決定
+        let parentSpouse = null;
+        if (parent.spouseId) parentSpouse = state.persons.find(x => x.id === parent.spouseId);
+        else parentSpouse = state.persons.find(x => x.spouseId === parent.id);
+        let fa = '', mo = '';
+        if (parent.gender === '男' || (!parent.gender && parent.relation && /男|父|兄|弟|夫/.test(parent.relation))) {
+          fa = parent.id; mo = parentSpouse ? parentSpouse.id : '';
+        } else if (parent.gender === '女' || (parent.relation && /女|母|姉|妹|妻/.test(parent.relation))) {
+          mo = parent.id; fa = parentSpouse ? parentSpouse.id : '';
+        } else {
+          fa = parent.id; mo = parentSpouse ? parentSpouse.id : '';
+        }
+        if (category === 'childSpouse') {
+          // 子の配偶者: 父母IDではなく spouseId を設定
+          showWizardFormModal({
+            title: '④ 子の配偶者を追加',
+            message: '配偶元の子: ' + parent.id + ' ' + (parent.name || ''),
+            defaults: { relation: parent.gender === '女' ? '婿' : '嫁', gender: parent.gender === '女' ? '男' : '女' },
+            relationOptions: ['嫁', '婿', '配偶者', '長男の妻', '長女の夫'],
+            allowMultiple: false,
+            onSave: (rec) => {
+              const id = _wizardNextId();
+              addPersonRow(Object.assign({
+                id, heirCategory: '', genColumn: '子世代',
+                displayOrder: _wizardNextOrder(),
+                spouseId: parent.id
+              }, rec));
+              if (!parent.spouseId) { parent.spouseId = id; _wizardRefreshTableRows(); }
+            }
+          });
+        } else {
+          // grandchild / nephew
+          const relDefault = category === 'grandchild' ? '孫' : '甥';
+          const relOpts = category === 'grandchild'
+            ? ['孫', '長男の長男', '長男の長女', '次男の長男', '長女の長男', '長女の長女']
+            : ['甥', '姪'];
+          const genCol = category === 'grandchild' ? '孫世代' : '被相続人世代';
+          const heirCat = category === 'grandchild' ? '' : '';
+          showWizardFormModal({
+            title: (category === 'grandchild' ? '⑤ 孫を追加' : '⑧ 甥姪を追加'),
+            message: '父ID=' + (fa || '(未)') + ' / 母ID=' + (mo || '(未)') + ' を自動設定します。',
+            defaults: { relation: relDefault, gender: '男' },
+            relationOptions: relOpts,
+            allowMultiple: true,
+            onSave: (rec) => {
+              const id = _wizardNextId();
+              addPersonRow(Object.assign({
+                id, heirCategory: heirCat, genColumn: genCol,
+                displayOrder: _wizardNextOrder(),
+                fatherId: fa, motherId: mo
+              }, rec));
+            }
+          });
+        }
+      }
+    });
+    return;
+  }
+}
+
+/* ============================================================
+   ウィザード「まとめて追加」表形式モーダル
+   ------------------------------------------------------------
+   1人ずつ連続追加ではなく、複数行を一度に入力できる表型UI。
+   ・列: 続柄 / 氏名 / 性別 / 生年月日 / 死亡日 / 備考
+   ・「+ 行を追加」で行を増やせる
+   ・「まとめて保存」で氏名が入力されている全行を一括保存
+   opts:
+     - title, message
+     - defaultRelation, defaultGender
+     - relationOptions: 続柄選択肢の配列
+     - onSaveRow(rec): 1行分を保存する callback。rec={name, relation, gender, birth, death, note}
+============================================================ */
+function showWizardBulkTableModal(opts) {
+  // 既存のオーバーレイがあれば除去
+  document.querySelectorAll('.in-tool-modal-overlay').forEach(e => e.remove());
+  const overlay = document.createElement('div');
+  overlay.className = 'in-tool-modal-overlay wizard-bulk-modal no-print';
+  const box = document.createElement('div');
+  box.className = 'in-tool-modal-box wizard-bulk-box';
+  box.style.cssText = 'max-width: 920px; width: 95%; max-height: 85vh; overflow-y: auto;';
+
+  // タイトル
+  const titleEl = document.createElement('div');
+  titleEl.className = 'itm-title';
+  titleEl.textContent = opts.title || 'まとめて追加';
+  box.appendChild(titleEl);
+  if (opts.message) {
+    const msg = document.createElement('div');
+    msg.className = 'itm-desc';
+    msg.style.cssText = 'font-size:11.5px; color:#5a6873; padding:4px 0 8px; line-height:1.5;';
+    msg.textContent = opts.message;
+    box.appendChild(msg);
+  }
+
+  // 表
+  const table = document.createElement('table');
+  table.className = 'wizard-bulk-table';
+  table.style.cssText = 'width:100%; border-collapse:collapse; font-size:11.5px; margin-bottom:8px;';
+  const thead = document.createElement('thead');
+  thead.innerHTML = '<tr style="background:#2b3a4a; color:#fff;">'
+    + '<th style="padding:5px 6px; width:36px; text-align:center;">#</th>'
+    + '<th style="padding:5px 6px; width:100px;">続柄</th>'
+    + '<th style="padding:5px 6px; min-width:140px;">氏名 <span style="color:#ffd0c8;">*</span></th>'
+    + '<th style="padding:5px 6px; width:90px;">性別</th>'
+    + '<th style="padding:5px 6px; width:110px;">生年月日</th>'
+    + '<th style="padding:5px 6px; width:110px;">死亡日</th>'
+    + '<th style="padding:5px 6px; min-width:120px;">備考</th>'
+    + '<th style="padding:5px 6px; width:44px;"></th>'
+    + '</tr>';
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  table.appendChild(tbody);
+  box.appendChild(table);
+
+  const relationOptions = opts.relationOptions || ['子'];
+  const defaultRelation = opts.defaultRelation || relationOptions[0];
+  const defaultGender = opts.defaultGender || '男';
+
+  // 初期 3 行を追加
+  const addRow = (initial) => {
+    initial = initial || {};
+    const tr = document.createElement('tr');
+    tr.style.cssText = 'border-bottom: 1px solid #e0e4e8;';
+    // 行番号
+    tr.appendChild(_wbtMakeCell(() => {
+      const span = document.createElement('span');
+      span.style.cssText = 'color:#5a6873; font-size:11px;';
+      return span;
+    }));
+    // 続柄
+    const relCell = _wbtMakeCell(() => {
+      const sel = document.createElement('select');
+      sel.style.cssText = 'width:100%; padding:3px 4px; font-size:11.5px; border:1px solid #b6bfca; border-radius:2px;';
+      relationOptions.forEach(r => {
+        const o = document.createElement('option'); o.value = r; o.textContent = r;
+        sel.appendChild(o);
+      });
+      sel.value = initial.relation || defaultRelation;
+      return sel;
+    });
+    relCell.dataset.field = 'relation';
+    tr.appendChild(relCell);
+    // 氏名
+    const nameCell = _wbtMakeCell(() => {
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.style.cssText = 'width:100%; padding:3px 5px; font-size:11.5px; border:1px solid #b6bfca; border-radius:2px; box-sizing:border-box;';
+      inp.placeholder = '氏名（入力すると保存対象）';
+      inp.value = initial.name || '';
+      return inp;
+    });
+    nameCell.dataset.field = 'name';
+    tr.appendChild(nameCell);
+    // 性別
+    const genCell = _wbtMakeCell(() => {
+      const sel = document.createElement('select');
+      sel.style.cssText = 'width:100%; padding:3px 4px; font-size:11.5px; border:1px solid #b6bfca; border-radius:2px;';
+      ['男', '女', '不明'].forEach(g => {
+        const o = document.createElement('option'); o.value = g; o.textContent = g;
+        sel.appendChild(o);
+      });
+      sel.value = initial.gender || defaultGender;
+      return sel;
+    });
+    genCell.dataset.field = 'gender';
+    tr.appendChild(genCell);
+    // 生年月日
+    const birthCell = _wbtMakeCell(() => {
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.style.cssText = 'width:100%; padding:3px 5px; font-size:11.5px; border:1px solid #b6bfca; border-radius:2px; box-sizing:border-box;';
+      inp.placeholder = 'S45.6.6 等';
+      inp.value = initial.birth || '';
+      return inp;
+    });
+    birthCell.dataset.field = 'birth';
+    tr.appendChild(birthCell);
+    // 死亡日
+    const deathCell = _wbtMakeCell(() => {
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.style.cssText = 'width:100%; padding:3px 5px; font-size:11.5px; border:1px solid #b6bfca; border-radius:2px; box-sizing:border-box;';
+      inp.placeholder = '任意';
+      inp.value = initial.death || '';
+      return inp;
+    });
+    deathCell.dataset.field = 'death';
+    tr.appendChild(deathCell);
+    // 備考
+    const noteCell = _wbtMakeCell(() => {
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.style.cssText = 'width:100%; padding:3px 5px; font-size:11.5px; border:1px solid #b6bfca; border-radius:2px; box-sizing:border-box;';
+      inp.placeholder = '任意';
+      inp.value = initial.note || '';
+      return inp;
+    });
+    noteCell.dataset.field = 'note';
+    tr.appendChild(noteCell);
+    // 削除ボタン
+    const delCell = document.createElement('td');
+    delCell.style.cssText = 'padding:4px; text-align:center;';
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn btn-small btn-danger';
+    delBtn.type = 'button';
+    delBtn.textContent = '✕';
+    delBtn.style.cssText = 'padding:2px 8px; font-size:11px;';
+    delBtn.addEventListener('click', () => {
+      tr.remove();
+      _wbtRenumber(tbody);
+    });
+    delCell.appendChild(delBtn);
+    tr.appendChild(delCell);
+    tbody.appendChild(tr);
+    _wbtRenumber(tbody);
+  };
+  for (let i = 0; i < 3; i++) addRow();
+
+  // 「+ 行を追加」ボタン
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'btn btn-small';
+  addBtn.textContent = '+ 行を追加';
+  addBtn.style.cssText = 'margin-bottom:10px;';
+  addBtn.addEventListener('click', () => addRow());
+  box.appendChild(addBtn);
+
+  // ステータス行
+  const status = document.createElement('div');
+  status.style.cssText = 'font-size:11px; color:#5a6873; padding:4px; min-height:18px;';
+  status.textContent = '※ 氏名を入力した行のみが保存されます。空白行は無視されます。';
+  box.appendChild(status);
+
+  // ボタン群
+  const btnRow = document.createElement('div');
+  btnRow.className = 'modal-btns';
+  btnRow.style.cssText = 'display:flex; gap:8px; justify-content:flex-end; padding-top:8px;';
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'btn btn-success';
+  saveBtn.textContent = 'まとめて保存';
+  saveBtn.addEventListener('click', () => {
+    let saved = 0, skipped = 0, error = null;
+    try {
+      Array.from(tbody.querySelectorAll('tr')).forEach(tr => {
+        const get = (f) => {
+          const cell = tr.querySelector('td[data-field="' + f + '"]');
+          if (!cell) return '';
+          const el = cell.querySelector('input, select');
+          return el ? (el.value || '').trim() : '';
+        };
+        const name = get('name');
+        if (!name) { skipped++; return; }
+        const rec = {
+          name, relation: get('relation'), gender: get('gender'),
+          birth: get('birth'), death: get('death'), note: get('note')
+        };
+        opts.onSaveRow(rec);
+        saved++;
+      });
+    } catch (e) { error = e.message; }
+    if (error) {
+      status.style.color = '#b03a2e';
+      status.textContent = 'エラー: ' + error;
+      return;
+    }
+    if (saved === 0) {
+      status.style.color = '#b03a2e';
+      status.textContent = '※ 保存対象の行がありません（氏名欄を入力してください）';
+      return;
+    }
+    overlay.remove();
+    showModalNotice({
+      title: '保存完了',
+      message: saved + ' 名を追加しました' + (skipped > 0 ? '（空白行 ' + skipped + ' 件はスキップ）' : '') + '。',
+      severity: 'info'
+    });
+  });
+  btnRow.appendChild(saveBtn);
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn btn-danger';
+  cancelBtn.textContent = 'キャンセル';
+  cancelBtn.addEventListener('click', () => overlay.remove());
+  btnRow.appendChild(cancelBtn);
+  box.appendChild(btnRow);
+
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') overlay.remove();
+  });
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  // 最初の氏名入力にフォーカス
+  setTimeout(() => {
+    const firstName = tbody.querySelector('tr td[data-field="name"] input');
+    if (firstName) firstName.focus();
+  }, 0);
+}
+
+function _wbtMakeCell(makeContent) {
+  const td = document.createElement('td');
+  td.style.cssText = 'padding:4px;';
+  td.appendChild(makeContent());
+  return td;
+}
+function _wbtRenumber(tbody) {
+  Array.from(tbody.querySelectorAll('tr')).forEach((tr, i) => {
+    const numCell = tr.children[0];
+    if (numCell) {
+      const sp = numCell.querySelector('span');
+      if (sp) sp.textContent = (i + 1).toString();
+    }
+  });
+}
+
+/* ============================================================
+   ウィザード入力フォーム モーダル
+   ------------------------------------------------------------
+   フィールド: 氏名・続柄(select)・性別(radio)・生年月日・備考
+   allowMultiple=true なら「保存して次の人を追加」「保存して完了」を提示
+============================================================ */
+function showWizardFormModal(opts) {
+  const overlay = document.createElement('div');
+  overlay.className = 'in-tool-modal-overlay wizard-form-modal';
+  const box = document.createElement('div');
+  box.className = 'in-tool-modal-box wizard-form-box';
+  // title
+  const titleEl = document.createElement('div');
+  titleEl.className = 'modal-title';
+  titleEl.textContent = opts.title || '家族を追加';
+  box.appendChild(titleEl);
+  if (opts.message) {
+    const msg = document.createElement('div');
+    msg.className = 'modal-message';
+    msg.style.cssText = 'font-size:11.5px; color:#5a6873; padding:6px 4px; margin-bottom:6px; line-height:1.4;';
+    msg.textContent = opts.message;
+    box.appendChild(msg);
+  }
+  // form fields
+  const form = document.createElement('div');
+  form.className = 'wizard-form-fields';
+  form.style.cssText = 'display:flex; flex-direction:column; gap:8px; padding:4px;';
+  // 氏名
+  const nameRow = document.createElement('div');
+  nameRow.innerHTML = '<label style="font-size:12px; color:#1f2d3d; font-weight:bold; display:block; margin-bottom:2px;">氏名 <span style="color:#b03a2e;">*</span></label>';
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.style.cssText = 'width:100%; padding:5px 8px; font-size:12px; border:1px solid #b6bfca; border-radius:3px; box-sizing:border-box;';
+  nameInput.placeholder = '例: 田中太郎';
+  nameRow.appendChild(nameInput);
+  form.appendChild(nameRow);
+  // 続柄
+  const relRow = document.createElement('div');
+  relRow.innerHTML = '<label style="font-size:12px; color:#1f2d3d; font-weight:bold; display:block; margin-bottom:2px;">続柄</label>';
+  const relSelect = document.createElement('select');
+  relSelect.style.cssText = 'width:100%; padding:5px 8px; font-size:12px; border:1px solid #b6bfca; border-radius:3px; box-sizing:border-box;';
+  (opts.relationOptions || []).forEach(r => {
+    const o = document.createElement('option');
+    o.value = r; o.textContent = r;
+    relSelect.appendChild(o);
+  });
+  if (opts.defaults && opts.defaults.relation) relSelect.value = opts.defaults.relation;
+  relRow.appendChild(relSelect);
+  form.appendChild(relRow);
+  // 性別
+  const genRow = document.createElement('div');
+  genRow.innerHTML = '<label style="font-size:12px; color:#1f2d3d; font-weight:bold; display:block; margin-bottom:2px;">性別</label>';
+  const genGroup = document.createElement('div');
+  genGroup.style.cssText = 'display:flex; gap:12px;';
+  ['男', '女', '不明'].forEach(g => {
+    const lbl = document.createElement('label');
+    lbl.style.cssText = 'font-size:12px; display:flex; align-items:center; gap:4px;';
+    const r = document.createElement('input');
+    r.type = 'radio'; r.name = 'wizardGender'; r.value = g;
+    if (opts.defaults && opts.defaults.gender === g) r.checked = true;
+    lbl.appendChild(r);
+    lbl.appendChild(document.createTextNode(g));
+    genGroup.appendChild(lbl);
+  });
+  genRow.appendChild(genGroup);
+  form.appendChild(genRow);
+  // 生年月日
+  const birthRow = document.createElement('div');
+  birthRow.innerHTML = '<label style="font-size:12px; color:#1f2d3d; font-weight:bold; display:block; margin-bottom:2px;">生年月日（任意）</label>';
+  const birthInput = document.createElement('input');
+  birthInput.type = 'text';
+  birthInput.style.cssText = 'width:100%; padding:5px 8px; font-size:12px; border:1px solid #b6bfca; border-radius:3px; box-sizing:border-box;';
+  birthInput.placeholder = '例: S45.6.6 / 1970.6.6';
+  birthRow.appendChild(birthInput);
+  form.appendChild(birthRow);
+  // 備考
+  const noteRow = document.createElement('div');
+  noteRow.innerHTML = '<label style="font-size:12px; color:#1f2d3d; font-weight:bold; display:block; margin-bottom:2px;">備考（任意）</label>';
+  const noteInput = document.createElement('input');
+  noteInput.type = 'text';
+  noteInput.style.cssText = 'width:100%; padding:5px 8px; font-size:12px; border:1px solid #b6bfca; border-radius:3px; box-sizing:border-box;';
+  noteInput.placeholder = '任意のメモ';
+  noteRow.appendChild(noteInput);
+  form.appendChild(noteRow);
+  box.appendChild(form);
+
+  // status line
+  const status = document.createElement('div');
+  status.className = 'wizard-status';
+  status.style.cssText = 'font-size:11px; color:#1e7e34; padding:4px; min-height:18px;';
+  box.appendChild(status);
+
+  // 保存処理
+  let savedCount = 0;
+  const collectAndSave = () => {
+    const name = (nameInput.value || '').trim();
+    if (!name) {
+      status.style.color = '#b03a2e';
+      status.textContent = '※ 氏名は必須です';
+      nameInput.focus();
+      return false;
+    }
+    const rec = {
+      name,
+      relation: relSelect.value || '',
+      gender: (form.querySelector('input[name="wizardGender"]:checked') || {}).value || '',
+      birth: (birthInput.value || '').trim(),
+      note: (noteInput.value || '').trim()
+    };
+    try { opts.onSave(rec); savedCount++; }
+    catch (e) {
+      status.style.color = '#b03a2e';
+      status.textContent = '※ エラー: ' + e.message;
+      return false;
+    }
+    status.style.color = '#1e7e34';
+    status.textContent = '✓ 保存しました (合計 ' + savedCount + ' 名)';
+    return true;
+  };
+
+  // ボタン
+  const btnRow = document.createElement('div');
+  btnRow.className = 'modal-btns';
+  if (opts.allowMultiple) {
+    const moreBtn = document.createElement('button');
+    moreBtn.className = 'btn btn-success';
+    moreBtn.textContent = '保存して次の人を入力';
+    moreBtn.addEventListener('click', () => {
+      if (collectAndSave()) {
+        // フォームをリセット（性別と続柄は維持）
+        nameInput.value = ''; birthInput.value = ''; noteInput.value = '';
+        nameInput.focus();
+      }
+    });
+    btnRow.appendChild(moreBtn);
+    const doneBtn = document.createElement('button');
+    doneBtn.className = 'btn';
+    doneBtn.textContent = '保存して完了';
+    doneBtn.addEventListener('click', () => {
+      if (collectAndSave()) document.body.removeChild(overlay);
+    });
+    btnRow.appendChild(doneBtn);
+  } else {
+    const okBtn = document.createElement('button');
+    okBtn.className = 'btn btn-success';
+    okBtn.textContent = '保存して完了';
+    okBtn.addEventListener('click', () => {
+      if (collectAndSave()) document.body.removeChild(overlay);
+    });
+    btnRow.appendChild(okBtn);
+  }
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn btn-danger';
+  cancelBtn.textContent = (opts.allowMultiple ? '入力をやめる' : 'キャンセル');
+  cancelBtn.addEventListener('click', () => {
+    document.body.removeChild(overlay);
+  });
+  btnRow.appendChild(cancelBtn);
+  box.appendChild(btnRow);
+
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') document.body.removeChild(overlay);
+  });
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  setTimeout(() => nameInput.focus(), 0);
+}
+
+/* ウィザード補助関数群 */
+function _wizardNextId() {
+  const usedIds = new Set(state.persons.map(p => p.id).filter(x => x));
+  let n = 1;
+  while (usedIds.has('P' + String(n).padStart(2, '0'))) n++;
+  return 'P' + String(n).padStart(2, '0');
+}
+function _wizardNextOrder() {
+  const orders = state.persons.map(p => +p.displayOrder).filter(x => !isNaN(x) && x > 0);
+  return (orders.length > 0 ? Math.max.apply(null, orders) + 10 : 10).toString();
+}
+function _wizardFindDecedentSpouse() {
+  const dec = findDecedent();
+  if (!dec) return '';
+  if (dec.spouseId) return dec.spouseId;
+  const sp = state.persons.find(p => p.spouseId === dec.id);
+  return sp ? sp.id : '';
+}
+function _wizardGenderOf(personId) {
+  const p = state.persons.find(x => x.id === personId);
+  return p ? (p.gender || '') : '';
+}
+function _wizardRefreshTableRows() {
+  // state.persons の変更を表に反映するため再描画
+  const tbody = document.querySelector('#personTable tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  state.persons.forEach(p => addPersonRow(p));
+}
+
+/* ============================================================
+   家族セット登録: 被相続人＋配偶者＋子をまとめて登録（仕様 #5・#6）
+   ------------------------------------------------------------
+   1画面で:
+     ・被相続人の氏名・性別・生年月日・死亡日（任意）
+     ・配偶者の氏名・性別・生年月日（任意。空欄なら配偶者登録しない）
+     ・子の表（続柄・氏名・性別・生年月日・死亡日・備考）
+   登録時に ID・親ID・配偶者ID を自動連携する。
+============================================================ */
+function showFamilySetDecedentSpouseChildrenModal() {
+  document.querySelectorAll('.in-tool-modal-overlay').forEach(e => e.remove());
+  const overlay = document.createElement('div');
+  overlay.className = 'in-tool-modal-overlay wizard-set-modal no-print';
+  const box = document.createElement('div');
+  box.className = 'in-tool-modal-box wizard-set-box';
+  box.style.cssText = 'max-width:960px; width:96%; max-height:90vh; overflow-y:auto;';
+
+  const titleEl = document.createElement('div');
+  titleEl.className = 'itm-title';
+  titleEl.textContent = '◎ 家族セット登録: 被相続人＋配偶者＋子';
+  box.appendChild(titleEl);
+  const desc = document.createElement('div');
+  desc.className = 'itm-desc';
+  desc.style.cssText = 'font-size:11.5px; color:#5a6873; padding:4px 0 10px; line-height:1.5;';
+  desc.textContent = '1画面で被相続人・配偶者・子をまとめて登録できます。ID／父母ID／配偶者IDは自動で連携します。';
+  box.appendChild(desc);
+
+  // 既存被相続人を上書きするか確認
+  const existingDec = findDecedent();
+  if (existingDec) {
+    const warn = document.createElement('div');
+    warn.style.cssText = 'background:#fff8f5; border-left:3px solid #d35400; padding:6px 10px; margin-bottom:10px; font-size:11.5px; color:#6b3a18;';
+    warn.textContent = '⚠ 既に被相続人「' + (existingDec.name || existingDec.id) + '」が登録されています。保存すると追加で「被相続人」続柄の人物が追加されます（重複に注意）。配偶者・子の入力は引き続き可能です。';
+    box.appendChild(warn);
+  }
+
+  // ── 被相続人入力 ──
+  const decBox = _wsmBuildPersonInputGroup('被相続人', { gender: '男', relation: '被相続人' }, true);
+  box.appendChild(decBox.section);
+
+  // ── 配偶者入力 ──
+  const spBox = _wsmBuildPersonInputGroup('配偶者', { gender: '女', relation: '妻' }, false);
+  // 配偶者の続柄候補を切り替えられるよう
+  const spRelSel = spBox.section.querySelector('select[data-wsm-field="relation"]');
+  if (spRelSel) {
+    spRelSel.innerHTML = '';
+    ['妻', '夫', '配偶者'].forEach(r => {
+      const o = document.createElement('option'); o.value = r; o.textContent = r;
+      spRelSel.appendChild(o);
+    });
+    spRelSel.value = '妻';
+  }
+  box.appendChild(spBox.section);
+
+  // ── 子の表 ──
+  const childTitle = document.createElement('div');
+  childTitle.style.cssText = 'font-size:12.5px; font-weight:bold; color:#1f3a5a; margin:12px 0 4px;';
+  childTitle.textContent = '子（複数行入力可）';
+  box.appendChild(childTitle);
+  const childTable = _wsmBuildChildrenTable({
+    relationOptions: ['長男', '二男', '三男', '四男', '長女', '二女', '三女', '四女', '養子', '養女', '子'],
+    defaultRelation: '長男', defaultGender: '男', initialRows: 3
+  });
+  box.appendChild(childTable.table);
+  const addChildBtn = document.createElement('button');
+  addChildBtn.className = 'btn btn-small';
+  addChildBtn.textContent = '+ 子を1行追加';
+  addChildBtn.type = 'button';
+  addChildBtn.style.cssText = 'margin-bottom:10px;';
+  addChildBtn.addEventListener('click', () => childTable.addRow());
+  box.appendChild(addChildBtn);
+
+  // ステータス
+  const status = document.createElement('div');
+  status.style.cssText = 'font-size:11px; color:#5a6873; padding:6px 4px; min-height:20px;';
+  status.textContent = '※ 被相続人の氏名は必須。配偶者・子は氏名が入力された行のみ保存対象。';
+  box.appendChild(status);
+
+  // ボタン
+  const btnRow = document.createElement('div');
+  btnRow.className = 'modal-btns';
+  btnRow.style.cssText = 'display:flex; gap:8px; justify-content:flex-end; padding-top:8px;';
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'btn btn-success';
+  saveBtn.textContent = 'まとめて保存';
+  saveBtn.addEventListener('click', () => {
+    const decData = decBox.collect();
+    if (!decData.name) {
+      status.style.color = '#b03a2e';
+      status.textContent = '※ 被相続人の氏名は必須です。';
+      return;
+    }
+    // 1) 被相続人を登録
+    const decId = _wizardNextId();
+    addPersonRow({
+      id: decId, name: decData.name, relation: '被相続人',
+      gender: decData.gender || '男', birth: decData.birth || '', death: decData.death || '',
+      heirCategory: '', genColumn: '被相続人世代',
+      displayOrder: _wizardNextOrder(), blockReason: decData.death ? '死亡' : 'なし',
+      note: decData.note || ''
+    });
+    // 2) 配偶者を登録（氏名が入力されている場合のみ）
+    const spData = spBox.collect();
+    let spouseId = '';
+    if (spData.name) {
+      spouseId = _wizardNextId();
+      addPersonRow({
+        id: spouseId, name: spData.name, relation: spData.relation || '妻',
+        gender: spData.gender || '女', birth: spData.birth || '', death: spData.death || '',
+        heirCategory: '配偶者', genColumn: '被相続人世代',
+        displayOrder: _wizardNextOrder(),
+        spouseId: decId, blockReason: spData.death ? '死亡' : 'なし',
+        note: spData.note || ''
+      });
+      // 被相続人側にも spouseId を補完
+      const decP = state.persons.find(p => p.id === decId);
+      if (decP) decP.spouseId = spouseId;
+      _wizardRefreshTableRows();
+    }
+    // 3) 子を登録 — 父ID/母IDを自動決定
+    let fa = '', mo = '';
+    const decGender = decData.gender || '男';
+    if (decGender === '女') { mo = decId; fa = spouseId; }
+    else { fa = decId; mo = spouseId; }
+    let savedChildren = 0;
+    childTable.collectRows().forEach(rec => {
+      const id = _wizardNextId();
+      addPersonRow({
+        id, name: rec.name, relation: rec.relation, gender: rec.gender,
+        birth: rec.birth, death: rec.death, note: rec.note,
+        heirCategory: '子', genColumn: '子世代',
+        displayOrder: _wizardNextOrder(),
+        fatherId: fa, motherId: mo,
+        blockReason: rec.death ? '死亡' : 'なし'
+      });
+      savedChildren++;
+    });
+    overlay.remove();
+    showModalNotice({
+      title: '家族セット登録 完了',
+      message: '被相続人' + (spouseId ? '＋配偶者' : '') + '＋子' + savedChildren + '名 を登録しました。',
+      severity: 'info'
+    });
+  });
+  btnRow.appendChild(saveBtn);
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn btn-danger';
+  cancelBtn.textContent = 'キャンセル';
+  cancelBtn.addEventListener('click', () => overlay.remove());
+  btnRow.appendChild(cancelBtn);
+  box.appendChild(btnRow);
+
+  overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.remove(); });
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  setTimeout(() => {
+    const f = decBox.section.querySelector('input[data-wsm-field="name"]');
+    if (f) f.focus();
+  }, 0);
+}
+
+/* ============================================================
+   家族セット登録: 先死亡子＋代襲孫をまとめて登録（仕様 #5・#7）
+   ------------------------------------------------------------
+   前提: 被相続人が登録済み。
+   1画面で:
+     ・先死亡子の情報（氏名・性別・生年月日・死亡日）— blockReason='死亡' を自動設定
+     ・その子（孫）の表 — 代襲相続人候補として登録
+============================================================ */
+function showFamilySetDeceasedChildModal() {
+  const dec = findDecedent();
+  if (!dec) return;
+  document.querySelectorAll('.in-tool-modal-overlay').forEach(e => e.remove());
+  const overlay = document.createElement('div');
+  overlay.className = 'in-tool-modal-overlay wizard-set-modal no-print';
+  const box = document.createElement('div');
+  box.className = 'in-tool-modal-box wizard-set-box';
+  box.style.cssText = 'max-width:960px; width:96%; max-height:90vh; overflow-y:auto;';
+
+  const titleEl = document.createElement('div');
+  titleEl.className = 'itm-title';
+  titleEl.textContent = '◎ 家族セット登録: 先死亡子＋代襲孫';
+  box.appendChild(titleEl);
+  const desc = document.createElement('div');
+  desc.className = 'itm-desc';
+  desc.style.cssText = 'font-size:11.5px; color:#5a6873; padding:4px 0 10px; line-height:1.5;';
+  desc.textContent = '先死亡子（被相続人より先に死亡した子）と、その子（被相続人の孫）= 代襲相続人候補をまとめて登録します。先死亡子は相続不能理由「死亡」、孫は代襲相続人候補として設定されます。';
+  box.appendChild(desc);
+
+  // 被相続人配偶者を解決
+  let decSpouseId = dec.spouseId || '';
+  if (!decSpouseId) {
+    const sp = state.persons.find(p => p.spouseId === dec.id);
+    if (sp) decSpouseId = sp.id;
+  }
+  let childFa = '', childMo = '';
+  if ((dec.gender || '男') === '女') { childMo = dec.id; childFa = decSpouseId; }
+  else { childFa = dec.id; childMo = decSpouseId; }
+
+  // ── 先死亡子の入力 ──
+  const deadChildBox = _wsmBuildPersonInputGroup('先死亡子', { gender: '男', relation: '長男' }, true);
+  // 続柄候補を子用に
+  const dcRelSel = deadChildBox.section.querySelector('select[data-wsm-field="relation"]');
+  if (dcRelSel) {
+    dcRelSel.innerHTML = '';
+    ['長男','二男','三男','四男','長女','二女','三女','四女','養子','養女','子'].forEach(r => {
+      const o = document.createElement('option'); o.value = r; o.textContent = r;
+      dcRelSel.appendChild(o);
+    });
+    dcRelSel.value = '長男';
+  }
+  // 死亡日のラベルを強調
+  const deathField = deadChildBox.section.querySelector('label[data-wsm-label="death"]');
+  if (deathField) deathField.textContent = '死亡日（任意・空欄でも先死亡扱い）';
+  box.appendChild(deadChildBox.section);
+
+  // ── 孫の表 ──
+  const grandTitle = document.createElement('div');
+  grandTitle.style.cssText = 'font-size:12.5px; font-weight:bold; color:#1f3a5a; margin:12px 0 4px;';
+  grandTitle.textContent = '代襲孫（複数行入力可） — 先死亡子の子';
+  box.appendChild(grandTitle);
+  const grandTable = _wsmBuildChildrenTable({
+    relationOptions: ['孫', '長男の長男', '長男の長女', '長男の次男', '次男の長男', '長女の長男', '長女の長女'],
+    defaultRelation: '孫', defaultGender: '男', initialRows: 2
+  });
+  box.appendChild(grandTable.table);
+  const addBtn = document.createElement('button');
+  addBtn.className = 'btn btn-small';
+  addBtn.textContent = '+ 孫を1行追加';
+  addBtn.type = 'button';
+  addBtn.style.cssText = 'margin-bottom:10px;';
+  addBtn.addEventListener('click', () => grandTable.addRow());
+  box.appendChild(addBtn);
+
+  // ステータス
+  const status = document.createElement('div');
+  status.style.cssText = 'font-size:11px; color:#5a6873; padding:6px 4px; min-height:20px;';
+  status.textContent = '※ 先死亡子の氏名は必須。孫は氏名が入力された行のみ保存対象。';
+  box.appendChild(status);
+
+  // ボタン
+  const btnRow = document.createElement('div');
+  btnRow.className = 'modal-btns';
+  btnRow.style.cssText = 'display:flex; gap:8px; justify-content:flex-end; padding-top:8px;';
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'btn btn-success';
+  saveBtn.textContent = 'まとめて保存';
+  saveBtn.addEventListener('click', () => {
+    const dcData = deadChildBox.collect();
+    if (!dcData.name) {
+      status.style.color = '#b03a2e';
+      status.textContent = '※ 先死亡子の氏名は必須です。';
+      return;
+    }
+    // 1) 先死亡子を登録（相続不能理由=死亡 + heirCategory='子'）
+    const dcId = _wizardNextId();
+    addPersonRow({
+      id: dcId, name: dcData.name, relation: dcData.relation || '長男',
+      gender: dcData.gender || '男', birth: dcData.birth || '', death: dcData.death || '',
+      heirCategory: '子', genColumn: '子世代',
+      displayOrder: _wizardNextOrder(),
+      fatherId: childFa, motherId: childMo,
+      blockReason: '死亡',
+      note: dcData.note || ''
+    });
+    // 2) 孫を登録（代襲相続人候補）
+    // 孫の父/母は先死亡子の性別で決定
+    const dcGender = dcData.gender || '男';
+    let gfa = '', gmo = '';
+    if (dcGender === '女') { gmo = dcId; gfa = ''; }
+    else { gfa = dcId; gmo = ''; }
+    let savedGrands = 0;
+    grandTable.collectRows().forEach(rec => {
+      const id = _wizardNextId();
+      addPersonRow({
+        id, name: rec.name, relation: rec.relation || '孫', gender: rec.gender,
+        birth: rec.birth, death: rec.death, note: rec.note,
+        heirCategory: '代襲相続人', genColumn: '孫世代',
+        displayOrder: _wizardNextOrder(),
+        fatherId: gfa, motherId: gmo,
+        blockReason: rec.death ? '死亡' : 'なし'
+      });
+      savedGrands++;
+    });
+    overlay.remove();
+    showModalNotice({
+      title: '家族セット登録 完了',
+      message: '先死亡子1名（相続不能理由=死亡）＋ 代襲孫' + savedGrands + '名 を登録しました。',
+      severity: 'info'
+    });
+  });
+  btnRow.appendChild(saveBtn);
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn btn-danger';
+  cancelBtn.textContent = 'キャンセル';
+  cancelBtn.addEventListener('click', () => overlay.remove());
+  btnRow.appendChild(cancelBtn);
+  box.appendChild(btnRow);
+
+  overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.remove(); });
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  setTimeout(() => {
+    const f = deadChildBox.section.querySelector('input[data-wsm-field="name"]');
+    if (f) f.focus();
+  }, 0);
+}
+
+/* 家族セット用: 単一人物の入力フィールド群を生成 */
+function _wsmBuildPersonInputGroup(label, defaults, required) {
+  defaults = defaults || {};
+  const section = document.createElement('div');
+  section.style.cssText = 'background:#f7fafc; border:1px solid #d0d7de; border-radius:4px; padding:8px 10px; margin-bottom:8px;';
+  const head = document.createElement('div');
+  head.style.cssText = 'font-size:12.5px; font-weight:bold; color:#1f3a5a; margin-bottom:6px;';
+  head.textContent = label + (required ? ' *' : '（任意・氏名空欄ならスキップ）');
+  section.appendChild(head);
+  const row = document.createElement('div');
+  row.style.cssText = 'display:grid; grid-template-columns: 1.4fr 0.7fr 0.7fr 1.1fr 1.1fr 1.4fr; gap:6px;';
+  // 氏名
+  const nameWrap = _wsmField('氏名', 'name');
+  const nameInput = nameWrap.querySelector('input');
+  nameWrap.querySelector('input').placeholder = required ? '必須' : '空欄ならスキップ';
+  row.appendChild(nameWrap);
+  // 続柄
+  const relWrap = document.createElement('div');
+  const relLbl = document.createElement('label');
+  relLbl.style.cssText = 'font-size:10.5px; color:#5a6873; display:block; margin-bottom:2px;';
+  relLbl.textContent = '続柄';
+  relLbl.setAttribute('data-wsm-label', 'relation');
+  relWrap.appendChild(relLbl);
+  const relSel = document.createElement('select');
+  relSel.setAttribute('data-wsm-field', 'relation');
+  relSel.style.cssText = 'width:100%; padding:4px 6px; font-size:11.5px; border:1px solid #b6bfca; border-radius:2px;';
+  const o0 = document.createElement('option');
+  o0.value = defaults.relation || ''; o0.textContent = defaults.relation || '(未設定)';
+  relSel.appendChild(o0);
+  relSel.value = defaults.relation || '';
+  relWrap.appendChild(relSel);
+  row.appendChild(relWrap);
+  // 性別
+  const genWrap = _wsmFieldSelect('性別', 'gender', ['男','女','不明'], defaults.gender || '男');
+  row.appendChild(genWrap);
+  // 生年月日
+  const birthWrap = _wsmField('生年月日', 'birth');
+  birthWrap.querySelector('input').placeholder = 'S45.6.6 等';
+  row.appendChild(birthWrap);
+  // 死亡日
+  const deathWrap = _wsmField('死亡日', 'death');
+  deathWrap.querySelector('input').placeholder = '任意';
+  const deathLbl = deathWrap.querySelector('label');
+  if (deathLbl) deathLbl.setAttribute('data-wsm-label', 'death');
+  row.appendChild(deathWrap);
+  // 備考
+  const noteWrap = _wsmField('備考', 'note');
+  noteWrap.querySelector('input').placeholder = '任意';
+  row.appendChild(noteWrap);
+  section.appendChild(row);
+  return {
+    section,
+    collect: () => {
+      const out = {};
+      section.querySelectorAll('[data-wsm-field]').forEach(el => {
+        out[el.getAttribute('data-wsm-field')] = (el.value || '').trim();
+      });
+      return out;
+    }
+  };
+}
+function _wsmField(label, key) {
+  const wrap = document.createElement('div');
+  const lbl = document.createElement('label');
+  lbl.style.cssText = 'font-size:10.5px; color:#5a6873; display:block; margin-bottom:2px;';
+  lbl.textContent = label;
+  wrap.appendChild(lbl);
+  const inp = document.createElement('input');
+  inp.type = 'text';
+  inp.setAttribute('data-wsm-field', key);
+  inp.style.cssText = 'width:100%; padding:4px 6px; font-size:11.5px; border:1px solid #b6bfca; border-radius:2px; box-sizing:border-box;';
+  wrap.appendChild(inp);
+  return wrap;
+}
+function _wsmFieldSelect(label, key, options, def) {
+  const wrap = document.createElement('div');
+  const lbl = document.createElement('label');
+  lbl.style.cssText = 'font-size:10.5px; color:#5a6873; display:block; margin-bottom:2px;';
+  lbl.textContent = label;
+  wrap.appendChild(lbl);
+  const sel = document.createElement('select');
+  sel.setAttribute('data-wsm-field', key);
+  sel.style.cssText = 'width:100%; padding:4px 6px; font-size:11.5px; border:1px solid #b6bfca; border-radius:2px;';
+  (options || []).forEach(o => {
+    const op = document.createElement('option'); op.value = o; op.textContent = o;
+    sel.appendChild(op);
+  });
+  sel.value = def || (options ? options[0] : '');
+  wrap.appendChild(sel);
+  return wrap;
+}
+
+/* 家族セット用: 子・孫の表を生成 */
+function _wsmBuildChildrenTable(opts) {
+  const relationOptions = opts.relationOptions || ['子'];
+  const defaultRelation = opts.defaultRelation || relationOptions[0];
+  const defaultGender = opts.defaultGender || '男';
+  const initialRows = opts.initialRows || 3;
+
+  const table = document.createElement('table');
+  table.style.cssText = 'width:100%; border-collapse:collapse; font-size:11.5px; margin-bottom:6px;';
+  const thead = document.createElement('thead');
+  thead.innerHTML = '<tr style="background:#2b3a4a; color:#fff;">'
+    + '<th style="padding:5px 6px; width:36px; text-align:center;">#</th>'
+    + '<th style="padding:5px 6px; width:110px;">続柄</th>'
+    + '<th style="padding:5px 6px; min-width:140px;">氏名</th>'
+    + '<th style="padding:5px 6px; width:88px;">性別</th>'
+    + '<th style="padding:5px 6px; width:110px;">生年月日</th>'
+    + '<th style="padding:5px 6px; width:110px;">死亡日</th>'
+    + '<th style="padding:5px 6px; min-width:120px;">備考</th>'
+    + '<th style="padding:5px 6px; width:44px;"></th>'
+    + '</tr>';
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  table.appendChild(tbody);
+
+  const renumber = () => {
+    Array.from(tbody.querySelectorAll('tr')).forEach((tr, i) => {
+      const cell = tr.children[0];
+      if (cell) {
+        const sp = cell.querySelector('span');
+        if (sp) sp.textContent = (i + 1).toString();
+      }
+    });
+  };
+  const addRow = (initial) => {
+    initial = initial || {};
+    const tr = document.createElement('tr');
+    tr.style.cssText = 'border-bottom:1px solid #e0e4e8;';
+    const numTd = document.createElement('td');
+    numTd.style.cssText = 'padding:4px; text-align:center;';
+    const numSpan = document.createElement('span');
+    numSpan.style.cssText = 'color:#5a6873; font-size:11px;';
+    numTd.appendChild(numSpan);
+    tr.appendChild(numTd);
+    const mkSel = (field, opts, def) => {
+      const td = document.createElement('td');
+      td.style.cssText = 'padding:4px;';
+      td.dataset.field = field;
+      const sel = document.createElement('select');
+      sel.style.cssText = 'width:100%; padding:3px 4px; font-size:11.5px; border:1px solid #b6bfca; border-radius:2px;';
+      opts.forEach(o => { const op = document.createElement('option'); op.value = o; op.textContent = o; sel.appendChild(op); });
+      sel.value = def;
+      td.appendChild(sel);
+      return td;
+    };
+    const mkInp = (field, placeholder, val) => {
+      const td = document.createElement('td');
+      td.style.cssText = 'padding:4px;';
+      td.dataset.field = field;
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.value = val || '';
+      inp.placeholder = placeholder || '';
+      inp.style.cssText = 'width:100%; padding:3px 5px; font-size:11.5px; border:1px solid #b6bfca; border-radius:2px; box-sizing:border-box;';
+      td.appendChild(inp);
+      return td;
+    };
+    tr.appendChild(mkSel('relation', relationOptions, initial.relation || defaultRelation));
+    tr.appendChild(mkInp('name', '氏名（入力すると保存対象）', initial.name));
+    tr.appendChild(mkSel('gender', ['男','女','不明'], initial.gender || defaultGender));
+    tr.appendChild(mkInp('birth', 'S45.6.6 等', initial.birth));
+    tr.appendChild(mkInp('death', '任意', initial.death));
+    tr.appendChild(mkInp('note', '任意', initial.note));
+    const delTd = document.createElement('td');
+    delTd.style.cssText = 'padding:4px; text-align:center;';
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'btn btn-small btn-danger';
+    delBtn.textContent = '✕';
+    delBtn.style.cssText = 'padding:2px 8px; font-size:11px;';
+    delBtn.addEventListener('click', () => { tr.remove(); renumber(); });
+    delTd.appendChild(delBtn);
+    tr.appendChild(delTd);
+    tbody.appendChild(tr);
+    renumber();
+  };
+  for (let i = 0; i < initialRows; i++) addRow();
+  const collectRows = () => {
+    const out = [];
+    Array.from(tbody.querySelectorAll('tr')).forEach(tr => {
+      const get = (f) => {
+        const cell = tr.querySelector('td[data-field="' + f + '"]');
+        if (!cell) return '';
+        const el = cell.querySelector('input, select');
+        return el ? (el.value || '').trim() : '';
+      };
+      const name = get('name');
+      if (!name) return;
+      out.push({
+        name,
+        relation: get('relation'), gender: get('gender'),
+        birth: get('birth'), death: get('death'), note: get('note')
+      });
+    });
+    return out;
+  };
+  return { table, addRow, collectRows };
+}
+
 /* 入力補助：種別に応じたデフォルト値で人物行を追加 */
 function quickAdd(kind) {
   // 既存IDの最大数値から次のIDを採番（P + 連番）
@@ -2429,7 +4102,7 @@ function importTSV(type) {
   }
 
   // 人物取込モード: 詳細23列(full) / 簡易9列(simple)。17列は旧版として後方互換受付。
-  let personTSVMode = 'full';
+  let personTSVMode = 'simple';
   if (type === 'person') {
     const sel = document.querySelector('input[name="personTSVMode"]:checked');
     if (sel) personTSVMode = sel.value;
@@ -3379,6 +5052,126 @@ function buildMarriageGroupsForColumn(persons, decedent) {
 }
 
 /* ============================================================
+   親グループ単位の並べ替え + サブヘッダ生成
+   ------------------------------------------------------------
+   子世代・孫世代の婚姻グループを、各グループの「親」が誰かで並べ替える。
+   親グループの境目には「被相続人の子」「兄〇〇の子」などの小見出しを挿入する。
+
+   colKey: 'child' | 'grand' | 'great'
+   返り値: { groups: 並び替え後の配列, subheaders: 各 group の直前に挿入する文字列 (null可) }
+============================================================ */
+/* 被相続人の血を引く人物かどうか判定（深さ指定）。
+   再帰: depth 段階の親系列のどこかで被相続人にたどり着けば true。
+   legacyBuildGenerationColumnDiagram と orderGroupsByParent の双方から参照される。
+   ※ 新方式（buildFamilyRowDiagram）では同等の並び順は classifyByFamilyRow が
+     直接行うため、この関数は旧方式互換のためのみ残存。 */
+function isBloodlineOfDecedent(personId, depth, decedent) {
+  if (!personId || !decedent) return false;
+  if (personId === decedent.id) return depth === 0;
+  const p = state.persons.find(x => x.id === personId);
+  if (!p) return false;
+  if (depth <= 0) return false;
+  return isBloodlineOfDecedent(p.fatherId, depth - 1, decedent)
+      || isBloodlineOfDecedent(p.motherId, depth - 1, decedent);
+}
+
+function orderGroupsByParent(groups, colKey, decedent) {
+  if (!decedent) return { groups, subheaders: groups.map(() => null) };
+
+  // 各グループのキー親人物を決定
+  // 子世代: グループ内の「血族側」人物の fatherId / motherId を参照（配偶者が血族の場合は逆）
+  // 孫世代: グループ内の「血族側」人物の親（つまり子世代の人物）を参照
+
+  // 各グループの「親グルーピングキー」を決定
+  // 子世代: そのグループの血族側人物の親 ID を取得
+  // 孫世代: 同様に親 ID (= 子世代の人物)
+  // 親 ID から「グルーピングラベル」を生成
+  const targetDepth = (colKey === 'child') ? 1 : (colKey === 'grand') ? 2 : 3;
+
+  const getGroupKey = (grp) => {
+    // 血族側を優先（被相続人の血族）
+    let blood = grp.find(p => isBloodlineOfDecedent(p.id, targetDepth, decedent));
+    if (!blood) blood = grp[0]; // フォールバック
+    const fa = blood.fatherId || '';
+    const mo = blood.motherId || '';
+    // 親ペアの正規化（順序非依存）
+    const pair = [fa, mo].sort().join('|');
+    return { key: pair, fatherId: fa, motherId: mo, blood };
+  };
+
+  // 各グループを (parentKey, originalIdx) でソート
+  const annotated = groups.map((g, idx) => ({ g, idx, gk: getGroupKey(g) }));
+
+  // parentKey の出現順（最初に現れた順）でグループ化
+  const keyOrder = [];
+  const keyMap = new Map();
+  annotated.forEach(a => {
+    if (!keyMap.has(a.gk.key)) {
+      keyMap.set(a.gk.key, []);
+      keyOrder.push(a.gk.key);
+    }
+    keyMap.get(a.gk.key).push(a);
+  });
+
+  // 並び替え後のグループ配列
+  const newGroups = [];
+  const newSubheaders = [];
+  keyOrder.forEach(k => {
+    const items = keyMap.get(k);
+    const firstItem = items[0];
+    // 小見出しテキスト生成
+    const label = makeParentGroupLabel(firstItem.gk, colKey, decedent);
+    items.forEach((it, j) => {
+      newGroups.push(it.g);
+      // 同じ親グループの最初のグループにだけ小見出しを出す
+      newSubheaders.push(j === 0 ? label : null);
+    });
+  });
+  return { groups: newGroups, subheaders: newSubheaders };
+}
+
+/* 親グループ用の小見出し文字列を作成
+   colKey=child:  「被相続人の子」「兄 田中一郎の子」「姉 山田花子の子」
+   colKey=grand:  「〇〇の子（孫）」 例: 「先死亡長男 田中次郎の子」
+   colKey=great:  「〇〇の子（曾孫）」 */
+function makeParentGroupLabel(gk, colKey, decedent) {
+  if (!gk.fatherId && !gk.motherId) return null;
+  const fa = state.persons.find(x => x.id === gk.fatherId);
+  const mo = state.persons.find(x => x.id === gk.motherId);
+  if (colKey === 'child') {
+    // 被相続人の直系子グループ判定
+    const isDirect = (gk.fatherId === decedent.id) || (gk.motherId === decedent.id);
+    if (isDirect) return '被相続人の子';
+    // 親が被相続人の兄弟姉妹なら「〇〇（兄/姉等）の子」
+    // 血族側の親を選ぶ（被相続人の兄弟姉妹）
+    const candidate = fa || mo;
+    if (!candidate) return null;
+    const rel = candidate.relation || '';
+    const name = candidate.name || candidate.id || '';
+    return rel ? (rel + ' ' + name + ' の子') : (name + ' の子');
+  }
+  if (colKey === 'grand') {
+    // 孫世代: 親（= 子世代の人物）を示す
+    const candidate = fa || mo;
+    if (!candidate) return null;
+    const rel = candidate.relation || '';
+    const name = candidate.name || candidate.id || '';
+    // 親が先死亡なら明示
+    const refDate = parseDate(state.basic.inheritanceDate);
+    const pDead = refDate && parseDate(candidate.death) && parseDate(candidate.death) < refDate;
+    const suffix = pDead ? ' の子（孫・代襲対象）' : ' の子（孫）';
+    return rel ? (rel + ' ' + name + suffix) : (name + suffix);
+  }
+  if (colKey === 'great') {
+    const candidate = fa || mo;
+    if (!candidate) return null;
+    const name = candidate.name || candidate.id || '';
+    return name + ' の子（曾孫）';
+  }
+  return null;
+}
+
+/* ============================================================
    カード表示オプション取得
 ============================================================ */
 function getCardOptions() {
@@ -3545,6 +5338,109 @@ document.addEventListener('DOMContentLoaded', initDisplayMode);
 setTimeout(initDisplayMode, 0);
 
 /* ============================================================
+   カード密度プリセット
+   ------------------------------------------------------------
+   - 最小: 氏名・続柄のみ（年齢/享年・重要マークも非表示。CSS で .card-preset-minimum 制御）
+   - 標準: 氏名・続柄・年齢/享年・重要マーク（既定）
+   - 詳細: 標準 + 職業・住所・親情報
+   - 戸籍確認: 標準 + 本籍・筆頭者・戸籍メモ
+   - カスタム: 個別チェックボックスのまま
+============================================================ */
+const CARD_PRESETS = {
+  minimum: { /* 全 OFF。CSS で他要素も隠す */ },
+  standard: {
+    optHeirCat: false, optBirth: false, optDeath: false, optNote: false,
+    optParents: false, optSpouse: false,
+    optOccupation: false, optAddress: false,
+    optRegisteredAddress: false, optRegisteredHead: false,
+    optFamilyRegisterMemo: false, optRelMemo: false
+  },
+  detail: {
+    optHeirCat: true, optBirth: true, optDeath: false, optNote: false,
+    optParents: true, optSpouse: false,
+    optOccupation: true, optAddress: true,
+    optRegisteredAddress: false, optRegisteredHead: false,
+    optFamilyRegisterMemo: false, optRelMemo: true
+  },
+  kosekiCheck: {
+    optHeirCat: true, optBirth: false, optDeath: false, optNote: false,
+    optParents: false, optSpouse: false,
+    optOccupation: false, optAddress: false,
+    optRegisteredAddress: true, optRegisteredHead: true,
+    optFamilyRegisterMemo: true, optRelMemo: false
+  }
+};
+
+function applyCardPreset(presetKey) {
+  const preset = CARD_PRESETS[presetKey];
+  // カスタム選択は何もしない（ユーザー個別操作を尊重）
+  if (presetKey === 'custom') {
+    state._currentCardPreset = 'custom';
+    if (typeof refreshPreview === 'function') refreshPreview();
+    return;
+  }
+  if (!preset) return;
+  // 最小プリセットは全OFFと同等扱い（CSSで追加要素を非表示）
+  const settings = (presetKey === 'minimum')
+    ? { optHeirCat: false, optBirth: false, optDeath: false, optNote: false,
+        optParents: false, optSpouse: false, optOccupation: false, optAddress: false,
+        optRegisteredAddress: false, optRegisteredHead: false,
+        optFamilyRegisterMemo: false, optRelMemo: false }
+    : preset;
+  Object.keys(settings).forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.checked = settings[id];
+  });
+  state._currentCardPreset = presetKey;
+  if (typeof refreshPreview === 'function') refreshPreview();
+}
+
+/* ============================================================
+   関係線モード（5モード+カスタム）
+============================================================ */
+function applyLineMode(modeKey) {
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.checked = val;
+  };
+  // 共通: showMajorOnlyLines は majorOnly モード時のみ ON
+  if (modeKey === 'custom') {
+    state._currentLineMode = 'custom';
+    if (typeof refreshPreview === 'function') refreshPreview();
+    return;
+  }
+  if (modeKey === 'all') {
+    set('showRelLines', true); set('showMarriageLines', true);
+    set('showParentLines', true); set('showMajorOnlyLines', false);
+  } else if (modeKey === 'majorOnly') {
+    set('showRelLines', true); set('showMarriageLines', true);
+    set('showParentLines', true); set('showMajorOnlyLines', true);
+  } else if (modeKey === 'parentOnly') {
+    set('showRelLines', true); set('showMarriageLines', false);
+    set('showParentLines', true); set('showMajorOnlyLines', false);
+  } else if (modeKey === 'marriageOnly') {
+    set('showRelLines', true); set('showMarriageLines', true);
+    set('showParentLines', false); set('showMajorOnlyLines', false);
+  } else if (modeKey === 'none') {
+    set('showRelLines', false); set('showMarriageLines', false);
+    set('showParentLines', false); set('showMajorOnlyLines', false);
+  }
+  state._currentLineMode = modeKey;
+  // 関係線のみ再描画
+  if (typeof drawRelationshipLines === 'function') drawRelationshipLines();
+}
+
+/* 初期化: cardPreset / lineMode を初期状態に同期 */
+function initCardAndLinePresets() {
+  const cp = document.getElementById('cardPreset');
+  if (cp) applyCardPreset(cp.value || 'standard');
+  const lm = document.getElementById('lineMode');
+  if (lm) applyLineMode(lm.value || 'majorOnly');
+}
+document.addEventListener('DOMContentLoaded', initCardAndLinePresets);
+setTimeout(initCardAndLinePresets, 100);
+
+/* ============================================================
    相続関係図 描画
 ============================================================ */
 function buildPersonCard(person, decedent, refDate, opts) {
@@ -3580,19 +5476,20 @@ function buildPersonCard(person, decedent, refDate, opts) {
   if (tcStatus === 'blocked') classes.push('target-blocked');
   card.className = classes.join(' ');
 
-  // 氏名（常時）
+  // 氏名 + 続柄 を1グループとして見せる（Excel版の主役強調に寄せる）
+  const nameRel = document.createElement('div');
+  nameRel.className = 'name-rel-row';
   const nameDiv = document.createElement('div');
   nameDiv.className = 'name';
   nameDiv.textContent = person.name || ('(' + (person.id || '?') + ')');
-  card.appendChild(nameDiv);
-
-  // 続柄（常時）
+  nameRel.appendChild(nameDiv);
   if (person.relation) {
     const rel = document.createElement('div');
     rel.className = 'rel';
     rel.textContent = person.relation;
-    card.appendChild(rel);
+    nameRel.appendChild(rel);
   }
+  card.appendChild(nameRel);
 
   // 年齢/享年（常時。死亡時は享年、生存時は年齢）
   // ※ 初期表示の最小構成に含める
@@ -3627,19 +5524,54 @@ function buildPersonCard(person, decedent, refDate, opts) {
   }
 
   // 相続開始日時点住所（住所履歴を優先、フォールバックは人物の inheritanceDateAddress）
+  // 夫婦で同住所の場合、配偶者カード側は重複表示せず「配偶者と同じ」表記
   if (opts.address) {
     const addrInfo = getInheritanceDateAddress(person.id, refDate);
     if (addrInfo) {
+      // 夫婦同住所判定: 自分にspouseIdがある、かつ配偶者も住所を持ち、正規化一致
+      let dedupShortText = null;
+      if (person.spouseId) {
+        const spouseAddr = getInheritanceDateAddress(person.spouseId, refDate);
+        const sp = state.persons.find(x => x.id === person.spouseId);
+        if (spouseAddr && spouseAddr.address
+            && normalizeAddress(addrInfo.address) === normalizeAddress(spouseAddr.address)) {
+          // 表示順: 早く表示順が来る方に住所、後の方に「同上」
+          // displayOrder（数値）で判定、空欄なら state.persons の登場順
+          const myOrder = person.displayOrder ? +person.displayOrder : 999;
+          const spOrder = sp && sp.displayOrder ? +sp.displayOrder : 999;
+          const myIdx = state.persons.findIndex(x => x.id === person.id);
+          const spIdx = state.persons.findIndex(x => x.id === person.spouseId);
+          const showShort = (myOrder > spOrder) || (myOrder === spOrder && myIdx > spIdx);
+          // 被相続人と配偶者の組合せでは、被相続人側に住所を表示し、配偶者側は「被相続人と同じ」
+          const decedentId = decedent ? decedent.id : null;
+          if (sp && sp.id === decedentId) {
+            dedupShortText = '住所: 被相続人と同じ';
+          } else if (decedentId && person.id === decedentId) {
+            dedupShortText = null; // 被相続人側はフル表示
+          } else if (showShort) {
+            const spLabel = (sp && /男|夫/.test(sp.relation || '')) ? '夫'
+                          : (sp && /女|妻/.test(sp.relation || '')) ? '妻'
+                          : '配偶者';
+            dedupShortText = '住所: ' + spLabel + 'と同じ';
+          }
+        }
+      }
+
       const ad = document.createElement('div');
       ad.className = 'extra';
-      let prefix = '住所: ';
-      // 施設・病院は所在情報扱いとして明示
-      if (addrInfo.addressType === '施設' || addrInfo.addressType === '病院') {
-        prefix = '所在(' + addrInfo.addressType + '): ';
-      } else if (addrInfo.source === 'manual') {
-        prefix = '住所(直接入力): ';
+      if (dedupShortText) {
+        ad.textContent = dedupShortText;
+        ad.style.fontStyle = 'italic';
+        ad.style.color = '#7a8593';
+      } else {
+        let prefix = '住所: ';
+        if (addrInfo.addressType === '施設' || addrInfo.addressType === '病院') {
+          prefix = '所在(' + addrInfo.addressType + '): ';
+        } else if (addrInfo.source === 'manual') {
+          prefix = '住所(直接入力): ';
+        }
+        ad.textContent = prefix + addrInfo.address;
       }
-      ad.textContent = prefix + addrInfo.address;
       card.appendChild(ad);
     }
   }
@@ -3678,16 +5610,29 @@ function buildPersonCard(person, decedent, refDate, opts) {
   }
 
   // 親情報（オプションON、または forceParents 指定時）
+  // 親が先死亡や続柄を持つ場合は補助情報として明示（甥姪・代襲相続人の関係根拠を見やすく）
   const showParents = opts.parents || opts.forceParents;
   if (showParents && (person.fatherId || person.motherId)) {
     const lines = [];
     const fa = state.persons.find(x => x.id === person.fatherId);
     const mo = state.persons.find(x => x.id === person.motherId);
-    if (fa) lines.push('父:' + (fa.name || fa.id));
-    if (mo) lines.push('母:' + (mo.name || mo.id));
+    const fmtParent = (parent) => {
+      if (!parent) return '';
+      const name = parent.name || parent.id || '?';
+      const parts = [];
+      if (parent.relation) parts.push(parent.relation);
+      parts.push(name);
+      // 先死亡の場合は明示
+      const pDead = refDate && parseDate(parent.death) && parseDate(parent.death) < refDate;
+      if (pDead) parts.push('(先死亡)');
+      return parts.join(' ');
+    };
+    if (fa) lines.push('父: ' + fmtParent(fa));
+    if (mo) lines.push('母: ' + fmtParent(mo));
     if (lines.length > 0) {
       const ex = document.createElement('div');
-      ex.className = 'extra';
+      // forceParents（甥姪・孫など関係性が重要な場合）はやや目立つスタイル
+      ex.className = opts.forceParents ? 'extra parent-info' : 'extra';
       ex.textContent = lines.join(' / ');
       card.appendChild(ex);
     }
@@ -3788,7 +5733,16 @@ function buildDiagram() {
   const dirSel = document.getElementById('diagramDirection');
   const dir = dirSel ? dirSel.value : 'vertical';
 
-  if (dir === 'genCols') return buildGenerationColumnDiagram(order, decedent);
+  if (dir === 'genCols') {
+    // 横型レイアウト。
+    // ★ 標準: 「家族ブロック行」方式（layoutMode='familyRows', buildFamilyRowDiagram）
+    // ★ 旧 : 「世代列方式」（layoutMode='genCols', legacyBuildGenerationColumnDiagram）
+    //        後方互換のためのみ残存。新規描画では使用しないこと。
+    const layoutSel = document.getElementById('genColLayoutMode');
+    const layoutMode = layoutSel ? layoutSel.value : 'familyRows';
+    if (layoutMode === 'familyRows') return buildFamilyRowDiagram(order, decedent);
+    return legacyBuildGenerationColumnDiagram(order, decedent);
+  }
   return buildVerticalDiagram(order, decedent);
 }
 
@@ -4001,13 +5955,436 @@ function buildVerticalDiagram(order, decedent) {
 }
 
 /* ============================================================
-   横型レイアウト（世代別列配置）
+   横型レイアウト（家族ブロック行方式）— 新方式 ★ 推奨 ★
    ------------------------------------------------------------
-   親世代 / 被相続人世代 / 子世代 / 孫世代 / 曾孫世代 / それ以下
-   を左から右に並べ、同じ世代列の人物を縦に並べる。
-   配偶者は同じ世代列内で婚姻グループとして縦に近接表示する。
+   1家族 = 1行（family-row）として横に並べ、各行は4セル構成:
+     親セル / 被相続人世代セル / 子世代セル / 孫世代セル
+   ・行A: 被相続人夫婦 行 → その親（親世代セル）/ 被相続人+配偶者 / 子 / 孫
+   ・行B: 兄夫婦 行 → 空 / 兄+兄嫁 / 兄の子（甥姪）/ 兄の孫
+   ・行C: 妹夫婦 行 → 空 / 妹+妹夫 / 妹の子（甥姪）/ 妹の孫
+   ・最終行: 親情報未設定 行（任意）— fatherId/motherId 不明の人物
+   それぞれの行は同一の grid テンプレートで列幅を揃え、見出し行（ヘッダー）と
+   完全に整列する。同じ blockIndex の親・子・孫が同じ高さ帯に来る。
+
+   1) classifyByFamilyRow: 全人物を行ごとに分類
+   2) 各行を grid-row として描画、4つの fr-cell に該当人物の婚姻グループを配置
+   3) 親ユニット線（fatherId+motherId）は既存ロジックがそのまま動作する
+      （カードに data-person-id がある／marriage-group に data-couple-key がある）
 ============================================================ */
-function buildGenerationColumnDiagram(order, decedent) {
+function classifyByFamilyRow(decedent) {
+  // 戻り値: 配列 [{ rowKey, rowLabel, rowClasses, cells:{ parent, decedent, child, grand } }, ...]
+  // cells の各エントリは「marriage-group の素材」（人物配列）の配列
+  const rows = [];
+  if (!decedent) return rows;
+
+  const persons = state.persons;
+  const placedIds = new Set();
+
+  const findMate = (p) => {
+    if (!p) return null;
+    if (p.spouseId) {
+      const m = persons.find(x => x.id === p.spouseId);
+      if (m) return m;
+    }
+    return persons.find(x => x.spouseId === p.id) || null;
+  };
+
+  // 行A: 被相続人夫婦 行
+  const decRow = {
+    rowKey: 'decedent', rowLabel: '被相続人世帯',
+    rowClasses: ['fr-decedent'],
+    cells: { parent: [], decedent: [], child: [], grand: [], great: [], below: [] }
+  };
+  // 親セル: 被相続人の父母
+  {
+    const fa = persons.find(x => x.id === decedent.fatherId);
+    const mo = persons.find(x => x.id === decedent.motherId);
+    if (fa || mo) {
+      const grp = [];
+      if (fa) { grp.push(fa); placedIds.add(fa.id); }
+      if (mo) { grp.push(mo); placedIds.add(mo.id); }
+      grp.isParentsOfDecedent = true;
+      decRow.cells.parent.push(grp);
+    }
+  }
+  // 被相続人セル: 被相続人 + 配偶者
+  {
+    const grp = [decedent];
+    placedIds.add(decedent.id);
+    const sp = findMate(decedent);
+    if (sp) { grp.push(sp); placedIds.add(sp.id); }
+    grp.isDecedentGroup = true;
+    decRow.cells.decedent.push(grp);
+  }
+  // 子セル: 被相続人の直系の子（その配偶者を含む）
+  const decChildren = persons.filter(p =>
+    !placedIds.has(p.id) && (p.fatherId === decedent.id || p.motherId === decedent.id)
+  );
+  decChildren.sort((a, b) => {
+    const ao = +a.displayOrder || 9999;
+    const bo = +b.displayOrder || 9999;
+    return ao - bo;
+  });
+  decChildren.forEach(child => {
+    if (placedIds.has(child.id)) return;
+    const grp = [child];
+    placedIds.add(child.id);
+    const sp = findMate(child);
+    if (sp && !placedIds.has(sp.id)) {
+      grp.push(sp); placedIds.add(sp.id);
+    }
+    decRow.cells.child.push(grp);
+  });
+  // 孫セル: 被相続人の孫（直系の子の子）
+  const decChildIds = new Set(decChildren.map(c => c.id));
+  const decGrandchildren = persons.filter(p =>
+    !placedIds.has(p.id) && (decChildIds.has(p.fatherId) || decChildIds.has(p.motherId))
+  );
+  decGrandchildren.sort((a, b) => (+a.displayOrder || 9999) - (+b.displayOrder || 9999));
+  decGrandchildren.forEach(g => {
+    if (placedIds.has(g.id)) return;
+    const grp = [g];
+    placedIds.add(g.id);
+    const sp = findMate(g);
+    if (sp && !placedIds.has(sp.id)) {
+      grp.push(sp); placedIds.add(sp.id);
+    }
+    decRow.cells.grand.push(grp);
+  });
+
+  // 曾孫セル: 被相続人の曾孫（直系の孫の子）
+  const decGrandIds = new Set(decGrandchildren.map(g => g.id));
+  const decGreats = persons.filter(p =>
+    !placedIds.has(p.id) && (decGrandIds.has(p.fatherId) || decGrandIds.has(p.motherId))
+  );
+  decGreats.sort((a, b) => (+a.displayOrder || 9999) - (+b.displayOrder || 9999));
+  decGreats.forEach(g => {
+    if (placedIds.has(g.id)) return;
+    const grp = [g];
+    placedIds.add(g.id);
+    const sp = findMate(g);
+    if (sp && !placedIds.has(sp.id)) { grp.push(sp); placedIds.add(sp.id); }
+    decRow.cells.great.push(grp);
+  });
+
+  // それ以下: 曾孫より下の系統（玄孫＝来孫等）を BFS で集める。
+  // 注意: 「親が既配置」だけで判定すると、被相続人の父母が placedIds に入っているため、
+  //       被相続人の兄弟姉妹まで巻き込んでしまう（兄弟姉妹は別の家族行として後で配置する）。
+  //       そのため、起点は「被相続人の直系子孫」のみ — descendantSeed を別途用意する。
+  const descendantSeed = new Set();
+  descendantSeed.add(decedent.id);
+  decChildren.forEach(c => descendantSeed.add(c.id));
+  decGrandchildren.forEach(g => descendantSeed.add(g.id));
+  decGreats.forEach(g => descendantSeed.add(g.id));
+  let progressed = true;
+  let safety = 0;
+  while (progressed && safety < 10) {
+    progressed = false; safety++;
+    const seedSnapshot = new Set(descendantSeed);
+    persons.forEach(p => {
+      if (placedIds.has(p.id)) return;
+      // 直系子孫の系統にある場合のみ（父母IDのいずれかが descendantSeed に含まれる）
+      const inLine = (p.fatherId && seedSnapshot.has(p.fatherId))
+                  || (p.motherId && seedSnapshot.has(p.motherId));
+      if (inLine) {
+        const grp = [p];
+        placedIds.add(p.id);
+        descendantSeed.add(p.id);
+        const sp = findMate(p);
+        if (sp && !placedIds.has(sp.id)) { grp.push(sp); placedIds.add(sp.id); }
+        decRow.cells.below.push(grp);
+        progressed = true;
+      }
+    });
+  }
+  rows.push(decRow);
+
+  // 行B以降: 被相続人の兄弟姉妹（=父母IDが被相続人と一致する人物）の各世帯行
+  const siblings = persons.filter(p =>
+    !placedIds.has(p.id) && p.id !== decedent.id && (
+      (decedent.fatherId && (p.fatherId === decedent.fatherId || p.motherId === decedent.fatherId)) ||
+      (decedent.motherId && (p.fatherId === decedent.motherId || p.motherId === decedent.motherId))
+    )
+  );
+  siblings.sort((a, b) => (+a.displayOrder || 9999) - (+b.displayOrder || 9999));
+  siblings.forEach(sib => {
+    if (placedIds.has(sib.id)) return;
+    const sibRow = {
+      rowKey: 'sib-' + sib.id,
+      rowLabel: (sib.relation || '兄弟姉妹') + ' ' + (sib.name || sib.id) + ' 世帯',
+      rowClasses: ['fr-sibling'],
+      cells: { parent: [], decedent: [], child: [], grand: [], great: [], below: [] }
+    };
+    // 被相続人世代セル: 兄弟姉妹 + その配偶者
+    const grp = [sib];
+    placedIds.add(sib.id);
+    const sp = findMate(sib);
+    if (sp && !placedIds.has(sp.id)) {
+      grp.push(sp); placedIds.add(sp.id);
+    }
+    sibRow.cells.decedent.push(grp);
+    // 子セル: 兄弟姉妹の子（=甥姪）
+    const sibChildren = persons.filter(p =>
+      !placedIds.has(p.id) && (p.fatherId === sib.id || p.motherId === sib.id ||
+        (sp && (p.fatherId === sp.id || p.motherId === sp.id)))
+    );
+    sibChildren.sort((a, b) => (+a.displayOrder || 9999) - (+b.displayOrder || 9999));
+    sibChildren.forEach(c => {
+      if (placedIds.has(c.id)) return;
+      const cgrp = [c];
+      placedIds.add(c.id);
+      const cs = findMate(c);
+      if (cs && !placedIds.has(cs.id)) {
+        cgrp.push(cs); placedIds.add(cs.id);
+      }
+      sibRow.cells.child.push(cgrp);
+    });
+    rows.push(sibRow);
+  });
+
+  // 行末: 親情報未設定 / 配置されなかった人物
+  const orphans = persons.filter(p => !placedIds.has(p.id));
+  if (orphans.length > 0) {
+    const orphanRow = {
+      rowKey: 'orphan', rowLabel: '親情報未設定',
+      rowClasses: ['fr-orphan'],
+      cells: { parent: [], decedent: [], child: [], grand: [], great: [], below: [] }
+    };
+    orphans.forEach(p => {
+      // 親IDが未設定で続柄が「子・孫・甥姪」系なら警告対象
+      const grp = [p];
+      placedIds.add(p.id);
+      const sp = findMate(p);
+      if (sp && !placedIds.has(sp.id)) {
+        grp.push(sp); placedIds.add(sp.id);
+      }
+      // どのセルに入れるか: 続柄から推測（粗いヒューリスティック）
+      const rel = (p.relation || '').trim();
+      if (/^(父|母|祖父|祖母|曽祖父|曽祖母)/.test(rel)) orphanRow.cells.parent.push(grp);
+      else if (/^(玄孫|来孫)/.test(rel)) orphanRow.cells.below.push(grp);
+      else if (/^(曾孫|曽孫)/.test(rel)) orphanRow.cells.great.push(grp);
+      else if (/^孫/.test(rel)) orphanRow.cells.grand.push(grp);
+      else if (/^(子|長男|次男|二男|三男|四男|長女|次女|二女|三女|四女|養子|養女|甥|姪)/.test(rel))
+        orphanRow.cells.child.push(grp);
+      else orphanRow.cells.decedent.push(grp);
+    });
+    rows.push(orphanRow);
+  }
+
+  return rows;
+}
+
+function buildFamilyRowDiagram(order, decedent) {
+  const refDate = parseDate(state.basic.inheritanceDate);
+  const baseOpts = getCardOptions();
+  const densitySel = document.getElementById('genColDensity');
+  const density = densitySel ? densitySel.value : 'standard';
+
+  // 列数の決定:
+  //   ・A4優先モードでは常に4列（仕様 #2）
+  //   ・それ以外は genColColumnCount セレクトに従う（4 / 6）。詳細確認なら 6 列。
+  //   ・カードプリセットが「詳細」または「戸籍確認」なら 6 列を既定にしてもよい。
+  let columnCount = 4;
+  const colCountSel = document.getElementById('genColColumnCount');
+  if (colCountSel) {
+    columnCount = (colCountSel.value === '6') ? 6 : 4;
+  }
+  if (density === 'a4') columnCount = 4; // A4優先は強制4列
+
+  const wrap = document.createElement('div');
+  wrap.className = 'gen-cols layout-family-rows';
+  if (density === 'a4') wrap.classList.add('density-a4');
+  else if (density === 'detail') wrap.classList.add('density-detail');
+  wrap.classList.add('col-count-' + columnCount);
+
+  // 列キーとラベル
+  const cellKeys = columnCount === 6
+    ? ['parent', 'decedent', 'child', 'grand', 'great', 'below']
+    : ['parent', 'decedent', 'child', 'grand'];
+  const cellLabels = columnCount === 6
+    ? ['親世代', '被相続人世代', '子世代', '孫世代', '曾孫世代', 'それ以下']
+    : ['親世代', '被相続人世代', '子世代', '孫世代'];
+
+  // ヘッダー行
+  const headerRow = document.createElement('div');
+  headerRow.className = 'gen-header-row';
+  cellLabels.forEach((lbl, idx) => {
+    const h = document.createElement('div');
+    h.className = 'gc-header gh-' + cellKeys[idx];
+    if (idx === 1) h.classList.add('gc-decedent');
+    h.textContent = lbl;
+    headerRow.appendChild(h);
+  });
+  wrap.appendChild(headerRow);
+
+  // 各家族行を生成
+  const familyRows = classifyByFamilyRow(decedent);
+  let blockIndex = 0;
+  familyRows.forEach((row) => {
+    // 全セルが空の行はスキップ
+    let totalGroups = 0;
+    cellKeys.forEach(k => { totalGroups += (row.cells[k] || []).length; });
+    // 4列モードでも曾孫/below があるなら合算してチェック（行表示判断のため）
+    if (columnCount === 4) {
+      totalGroups += (row.cells.great || []).length + (row.cells.below || []).length;
+    }
+    if (totalGroups === 0) return;
+
+    const rowEl = document.createElement('div');
+    rowEl.className = 'family-row';
+    (row.rowClasses || []).forEach(c => rowEl.classList.add(c));
+    rowEl.setAttribute('data-row-key', row.rowKey);
+    rowEl.setAttribute('data-block-index', String(blockIndex));
+    blockIndex++;
+
+    if (row.rowLabel) {
+      const lbl = document.createElement('div');
+      lbl.className = 'family-row-label';
+      lbl.textContent = row.rowLabel;
+      rowEl.appendChild(lbl);
+    }
+
+    cellKeys.forEach(cellKey => {
+      const cell = document.createElement('div');
+      cell.className = 'fr-cell fr-' + cellKey;
+      const groups = row.cells[cellKey] || [];
+      if (groups.length > 0) {
+        const subhead = makeFrCellHeader(cellKey, row, decedent);
+        if (subhead) {
+          const sh = document.createElement('div');
+          sh.className = 'fr-cell-header';
+          sh.textContent = subhead;
+          cell.appendChild(sh);
+        }
+      }
+      groups.forEach(grp => {
+        const gEl = document.createElement('div');
+        gEl.className = 'marriage-group';
+        if (grp.isDecedentGroup) gEl.classList.add('mg-decedent');
+        if (cellKey === 'parent' || cellKey === 'decedent') {
+          const ids = grp.map(x => x.id || '').sort();
+          if (ids.length === 2) gEl.setAttribute('data-couple-key', ids.join('|'));
+          else if (ids.length === 1) gEl.setAttribute('data-couple-key', ids[0]);
+        }
+        if (cellKey === 'child' || cellKey === 'grand' || cellKey === 'great' || cellKey === 'below') {
+          const depth = cellKey === 'child' ? 1 : cellKey === 'grand' ? 2 : cellKey === 'great' ? 3 : 4;
+          const blood = grp.find(p => isBloodlineOfDecedent(p.id, depth, decedent)) || grp[0];
+          if (blood) {
+            const fa = blood.fatherId || '';
+            const mo = blood.motherId || '';
+            gEl.setAttribute('data-family-parent-key', fa + '|' + mo);
+          }
+        }
+        let hiHeir = false, hiSubst = false;
+        grp.forEach(person => {
+          if (decedent && person.id === decedent.id) return;
+          const s = getTargetCandidateStatus(person, decedent, order, refDate);
+          if (s === 'heir') hiHeir = true;
+          if (s === 'subst') hiSubst = true;
+        });
+        if (hiHeir) gEl.classList.add('mg-target-heir');
+        else if (hiSubst) gEl.classList.add('mg-target-subst');
+        grp.forEach((person, idx) => {
+          if (idx > 0) {
+            const lk = document.createElement('div');
+            lk.className = 'mg-link';
+            gEl.appendChild(lk);
+          }
+          // 孫・甥姪・曾孫以降は親情報を強制表示
+          let perCardOpts = baseOpts;
+          if (cellKey === 'grand' || cellKey === 'great' || cellKey === 'below'
+              || (cellKey === 'child' && row.rowKey !== 'decedent')) {
+            perCardOpts = Object.assign({}, baseOpts, { forceParents: true });
+          }
+          gEl.appendChild(buildPersonCard(person, decedent, refDate, perCardOpts));
+        });
+        cell.appendChild(gEl);
+      });
+
+      // 4列モードで「孫セル」に、曾孫または それ以下 が存在するときは注記（仕様 #2）
+      if (columnCount === 4 && cellKey === 'grand') {
+        const greatCount = (row.cells.great || []).length;
+        const belowCount = (row.cells.below || []).length;
+        if (greatCount + belowCount > 0) {
+          const note = document.createElement('div');
+          note.className = 'fr-cell-extra-note';
+          const parts = [];
+          if (greatCount > 0) parts.push('曾孫 ' + greatCount + ' グループ');
+          if (belowCount > 0) parts.push('それ以下 ' + belowCount + ' グループ');
+          note.textContent = '※ ' + parts.join('・') + ' あり（人物一覧参照）';
+          cell.appendChild(note);
+        }
+      }
+
+      if (groups.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'fr-cell-empty';
+        empty.textContent = '';
+        cell.appendChild(empty);
+      }
+      rowEl.appendChild(cell);
+    });
+
+    wrap.appendChild(rowEl);
+  });
+
+  if (familyRows.length === 0 || wrap.childElementCount <= 1) {
+    const note = document.createElement('div');
+    note.style.cssText = 'padding: 12px; color: #888; font-size: 11px; text-align: center;';
+    note.textContent = '(人物データが不足しています。被相続人を登録してください。)';
+    wrap.appendChild(note);
+  }
+  return wrap;
+}
+
+/* 家族行内セルの小見出しを作成 */
+function makeFrCellHeader(cellKey, row, decedent) {
+  if (cellKey === 'parent') {
+    if (row.rowKey === 'decedent') return '被相続人の父母';
+    if (row.rowKey === 'orphan') return '親世代（親情報未設定）';
+    return null;
+  }
+  if (cellKey === 'decedent') {
+    if (row.rowKey === 'decedent') return '被相続人 夫婦';
+    if (row.rowKey === 'orphan') return '被相続人世代（親情報未設定）';
+    return row.rowLabel || null;
+  }
+  if (cellKey === 'child') {
+    if (row.rowKey === 'decedent') return '被相続人の子';
+    if (row.rowKey === 'orphan') return '子世代（親情報未設定）';
+    // 兄弟姉妹の子
+    const sibLabel = row.rowLabel ? row.rowLabel.replace(/世帯$/, '') : '';
+    return sibLabel ? sibLabel + ' の子（甥姪）' : '甥姪';
+  }
+  if (cellKey === 'grand') {
+    if (row.rowKey === 'decedent') return '被相続人の孫';
+    if (row.rowKey === 'orphan') return '孫世代（親情報未設定）';
+    return '孫';
+  }
+  if (cellKey === 'great') {
+    if (row.rowKey === 'decedent') return '被相続人の曾孫';
+    if (row.rowKey === 'orphan') return '曾孫世代（親情報未設定）';
+    return '曾孫';
+  }
+  if (cellKey === 'below') {
+    if (row.rowKey === 'decedent') return 'それ以下の直系';
+    if (row.rowKey === 'orphan') return 'それ以下（親情報未設定）';
+    return 'それ以下';
+  }
+  return null;
+}
+
+
+/* ============================================================
+   ★ 旧横型レイアウト — 後方互換用 ★
+   ------------------------------------------------------------
+   ★ 新しい標準は layout-family-rows / buildFamilyRowDiagram です。
+   ★ この関数（旧名 buildGenerationColumnDiagram）は後方互換のためのみ残しています。
+   旧方式: 世代列を縦に切り、各列内に family-block を作る方式。
+   現在は「横型レイアウト」セレクト = "世代列方式（旧）" の場合にのみ呼び出される。
+   新規描画コードはこの関数を使わず buildFamilyRowDiagram() を使うこと。
+============================================================ */
+function legacyBuildGenerationColumnDiagram(order, decedent) {
   const refDate = parseDate(state.basic.inheritanceDate);
   const baseOpts = getCardOptions();
   const descMode = (document.getElementById('descendantMode') || {}).value || 'detail';
@@ -4095,7 +6472,16 @@ function buildGenerationColumnDiagram(order, decedent) {
     }
 
     // 婚姻グループ構築
-    const groups = buildMarriageGroupsForColumn(personsInCol, decedent);
+    let groups = buildMarriageGroupsForColumn(personsInCol, decedent);
+
+    // 子世代・孫世代では、親グループ単位で並べ替え＋小見出し挿入
+    // → 親A の子グループ、親B の子グループ ... が視覚的にまとまるようにする
+    let groupSubheaders = null; // groups と同じ長さの配列。文字列があればその直前にサブヘッダ挿入
+    if (cd.key === 'child' || cd.key === 'grand' || cd.key === 'great') {
+      const ordered = orderGroupsByParent(groups, cd.key, decedent);
+      groups = ordered.groups;
+      groupSubheaders = ordered.subheaders;
+    }
 
     // 横型A4優先モード: 世代列ごとに表示グループ上限を設定し、超過分は「ほかN名」化
     const A4_GROUP_LIMITS = {
@@ -4135,10 +6521,41 @@ function buildGenerationColumnDiagram(order, decedent) {
       truncatedNote.textContent = noteText;
     }
 
-    visibleGroups.forEach(grp => {
+    // 家族ブロック方式: 同じ親ユニットに属する婚姻グループを `.family-block` で囲む。
+    // 単純な margin-top の整列だけでなく、DOM レベルで「兄夫婦の子」「妹夫婦の子」を
+    // 別ブロックに分け、視覚的にもまとまりが分かるようにする。
+    // 親情報未設定（fatherId/motherId 共に空欄）の子は「親情報未設定」ブロックに置く。
+    let currentBlock = null;
+    let currentBlockKey = null;
+    const isFamilyBlockCol = (cd.key === 'child' || cd.key === 'grand' || cd.key === 'great');
+
+    visibleGroups.forEach((grp, idx) => {
       const gEl = document.createElement('div');
       gEl.className = 'marriage-group';
       if (grp.isDecedentGroup) gEl.classList.add('mg-decedent');
+
+      // このグループの「家族キー」を決定（子世代以降のみ）
+      let familyKey = null;
+      if (isFamilyBlockCol) {
+        const blood = grp.find(p => isBloodlineOfDecedent(p.id, (cd.key === 'child' ? 1 : cd.key === 'grand' ? 2 : 3), decedent))
+                   || grp[0];
+        if (blood) {
+          const fa = blood.fatherId || '';
+          const mo = blood.motherId || '';
+          familyKey = fa + '|' + mo;
+          gEl.setAttribute('data-family-parent-key', familyKey);
+        }
+      }
+      // 被相続人世代列のグループには、そのグループ内人物の組合せキーを記録（子世代から参照される）
+      if (cd.key === 'parent' || cd.key === 'decedent') {
+        const ids = grp.map(x => x.id || '').sort();
+        if (ids.length === 2) {
+          gEl.setAttribute('data-couple-key', ids.join('|'));
+        } else if (ids.length === 1) {
+          gEl.setAttribute('data-couple-key', ids[0]);
+        }
+      }
+
       // グループ内に「相続人候補(緑)」または「代襲候補(紫)」が居れば強調
       let hiHeir = false, hiSubst = false;
       grp.forEach(person => {
@@ -4168,7 +6585,37 @@ function buildGenerationColumnDiagram(order, decedent) {
         }
         gEl.appendChild(buildPersonCard(person, decedent, refDate, perCardOpts));
       });
-      body.appendChild(gEl);
+
+      // ブロックへの追加 — 家族ブロック対象列の場合のみ family-block で囲む
+      if (isFamilyBlockCol) {
+        // 同じ親キーが続く間は同一ブロックに追加。新しいキーが来たらブロックを切り替え
+        if (familyKey !== currentBlockKey || !currentBlock) {
+          currentBlock = document.createElement('div');
+          currentBlock.className = 'family-block';
+          if (familyKey) currentBlock.setAttribute('data-family-key', familyKey);
+          // 「親情報未設定」（fatherId/motherId 共に空欄）はオレンジ系で警告風に
+          const noParent = !familyKey || familyKey === '|';
+          if (noParent) currentBlock.classList.add('fb-no-parent');
+          // サブヘッダ: orderGroupsByParent から渡された見出し、または親情報未設定なら明示
+          const sh = document.createElement('div');
+          sh.className = 'family-block-header';
+          if (noParent) {
+            sh.textContent = '親情報未設定（線で繋がりません）';
+            sh.classList.add('fb-warn');
+          } else if (groupSubheaders && groupSubheaders[idx]) {
+            sh.textContent = groupSubheaders[idx];
+          } else {
+            // フォールバック: 親グループキーから簡易見出しを生成
+            sh.textContent = '同じ親の子';
+          }
+          currentBlock.appendChild(sh);
+          body.appendChild(currentBlock);
+          currentBlockKey = familyKey;
+        }
+        currentBlock.appendChild(gEl);
+      } else {
+        body.appendChild(gEl);
+      }
     });
     if (truncatedNote) body.appendChild(truncatedNote);
 
@@ -4808,6 +7255,87 @@ function renderLegend() {
 ============================================================ */
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+/* ============================================================
+   家族ブロックの縦位置整列（横型レイアウト専用）
+   ------------------------------------------------------------
+   横型では、各 .gen-col 列内の婚姻グループが順次縦に並ぶ。
+   ここでは子世代・孫世代の各「親ユニット単位の最初のグループ」を、
+   親世代の対応する couple グループ（data-couple-key）の縦位置に近づける。
+
+   レイアウト戦略: margin-top
+   - 旧方式の transform: translateY は layout を変更しないため、
+     同じ親ユニット内に複数の婚姻グループがある場合、後続グループが
+     translateY された先頭グループと重なる懸念があった。
+   - margin-top は layout flow を押し下げるため、後続グループも自然に
+     ずれて重ならない。さらに getBoundingClientRect 値も反映される
+     ため、後段の SVG 描画は整列後の位置を正しく追従する。
+   - 各 redraw 時に marginTop を一旦 '' に戻してから再計算するため、
+     値の累積はない。
+
+   注: 上方向には動かさない（diff > 4 のときだけ下げる）。
+       上に動かすと、その上に存在する他の家族ブロックと重なる恐れがある。
+============================================================ */
+function applyFamilyBlockAlignment() {
+  // family-row レイアウト（新方式）の場合、CSS Grid が同じ blockIndex の高さを
+  // 自然に揃えるため、margin-top の後追い調整は不要。リセットのみ実施。
+  document.querySelectorAll('.gen-cols .family-block, .gen-cols .marriage-group').forEach(g => {
+    g.style.marginTop = '';
+    g.style.transform = '';
+  });
+  // 新方式（layout-family-rows）が含まれる .gen-cols は対象外
+  const isLegacyLayout = (genCols) => !genCols.classList.contains('layout-family-rows');
+
+  document.querySelectorAll('.gen-cols').forEach(genCols => {
+    if (!isLegacyLayout(genCols)) return; // 新方式はスキップ
+    // 親 couple-key → Y 座標のマップを構築
+    // 親世代列 / 被相続人世代列 / 子世代列（孫世代の親として）を対象
+    const parentYByKey = new Map();
+    genCols.querySelectorAll(
+      '.gc-parent .marriage-group[data-couple-key], ' +
+      '.gc-decedent .marriage-group[data-couple-key]'
+    ).forEach(g => {
+      const key = g.getAttribute('data-couple-key');
+      const r = g.getBoundingClientRect();
+      if (!parentYByKey.has(key)) {
+        parentYByKey.set(key, r.top + r.height / 2);
+      }
+    });
+    // 子世代列も grandchild の親として登録
+    genCols.querySelectorAll('.gc-child .marriage-group[data-couple-key]').forEach(g => {
+      const key = g.getAttribute('data-couple-key');
+      const r = g.getBoundingClientRect();
+      if (!parentYByKey.has(key)) {
+        parentYByKey.set(key, r.top + r.height / 2);
+      }
+    });
+
+    // 子世代・孫世代・曾孫世代の各列を、親キーに対応する Y へ寄せる
+    // ターゲット: .family-block（家族ブロック単位の整列）
+    ['gc-child', 'gc-grand', 'gc-great'].forEach(colCls => {
+      const col = genCols.querySelector('.' + colCls);
+      if (!col) return;
+      const blocks = Array.from(col.querySelectorAll('.family-block[data-family-key]'));
+      blocks.forEach(blk => {
+        const fkey = blk.getAttribute('data-family-key');
+        if (!fkey || fkey === '|') return; // 親情報未設定ブロックは整列対象外
+        const parts = fkey.split('|').filter(Boolean).sort();
+        const parentKeyCanonical = parts.join('|');
+        const parentY = parentYByKey.get(parentKeyCanonical);
+        if (parentY === undefined) return;
+        // 直前ブロックに適用した margin-top を反映させるため強制リフロー
+        blk.offsetTop;
+        const r = blk.getBoundingClientRect();
+        const currentCenterY = r.top + r.height / 2;
+        const diff = parentY - currentCenterY;
+        // 下方向にのみ寄せる。上に動かすと先行ブロックと重なる恐れ
+        if (diff > 4) {
+          blk.style.marginTop = Math.round(diff) + 'px';
+        }
+      });
+    });
+  });
+}
+
 function drawRelationshipLines() {
   // 既存のSVGを除去（再描画前に必ずクリア）
   document.querySelectorAll('.relationship-lines-svg').forEach(e => e.remove());
@@ -4816,6 +7344,9 @@ function drawRelationshipLines() {
   document.querySelectorAll('.diagram, .gen-cols').forEach(w => {
     w.classList.remove('rl-on');
   });
+
+  // 家族ブロックの縦位置整列（横型のみ）— SVG 描画前に実施し、整列後の位置を線が追従する
+  applyFamilyBlockAlignment();
 
   // チェックボックス状態
   const masterToggle = document.getElementById('showRelLines');
@@ -4919,22 +7450,24 @@ function drawLinesForWrapper(wrapper, showMarriage, showParent, simpleMode) {
     });
   }
 
-  // === 親子線 ===
+  // === 親子線（親ユニット単位） ===
+  // 個人ID単位ではなく、fatherId+motherId のユニット単位で1系統を描く。
+  // 父母両方が表示されていれば中点アンカーから、片親だけならそのカードから。
   if (showParent) {
-    const parentChildren = collectParentChildMap();
-    parentChildren.forEach((childIds, parentId) => {
-      const parent = points.get(parentId);
-      if (!parent) return;
+    const parentUnits = collectParentUnits();
+    parentUnits.forEach((unit, unitKey) => {
+      const anchor = computeParentUnitAnchor(unit, points, wrapper, wrapperRect);
+      if (!anchor) return; // 両親とも図上にない → 線描かない
       // 子の中で同一 wrapper 内にあるもののみ
-      const cs = childIds
+      const cs = unit.children
         .map(id => ({ id, pts: points.get(id), p: state.persons.find(x => x.id === id) }))
         .filter(c => c.pts && c.p);
       if (cs.length === 0) return;
 
       if (isVertical) {
-        drawVerticalParentChildLines(parent, cs, simpleMode, addPath);
+        drawVerticalParentChildLines(anchor, cs, simpleMode, addPath);
       } else {
-        drawHorizontalParentChildLines(parent, cs, simpleMode, addPath);
+        drawHorizontalParentChildLines(anchor, cs, simpleMode, addPath);
       }
     });
   }
@@ -4952,31 +7485,55 @@ function drawLinesForWrapper(wrapper, showMarriage, showParent, simpleMode) {
 }
 
 /* ============================================================
-   関係線描画 — 拡張ポイント（将来「主要人物のみ線表示」モード等）
+   関係線描画 — 主要関数の役割（現行仕様）
    ------------------------------------------------------------
+   現行の親子線は「個人単位」ではなく「親ユニット単位（fatherId+motherId）」で描画する。
+   父母の組合せ毎に 1 系統の線（中央アンカー → 共通幹線 → 子分岐）を引き、
+   親子関係ではない人物同士が線で繋がって見える誤読を排除する設計。
+
    shouldIncludePersonInLines(personId):
      関係線描画対象に含めるかの判定。返り値 true で線対象。
-     現状: 図上省略人物のみ除外。
-     将来: 主要人物（被相続人＋配偶者＋直系子孫の第n世代まで等）に
-     限定する場合は、ここに条件を追加するか、外部から差し替える。
+     - 図上省略人物は常に除外。
+     - 「主要人物のみ」モード時は isMajorPerson() で絞込。
+       ただし主要人物でなくても「子のいずれかが主要人物」である人物は
+       橋渡しとして含める（兄弟姉妹関係を父母経由で繋ぐため）。
+
+   isMajorPerson(personId):
+     被相続人本人 / 配偶者 / 子 / 代襲相続人 / 直系尊属 / 兄弟姉妹 のいずれか。
+     heirCategory が未入力でも relation テキスト（配偶者・夫・妻・子・長男…・
+     父・母・兄弟姉妹 等）から推定する。孫・甥・姪は代襲相続人扱い又は
+     第3順位モード時のみ主要人物として扱う。
 
    collectMarriagePairs():
-     描画対象の婚姻ペア配列 [[idA, idB], ...] を返す。
-     重複排除済み。同上の include 判定でフィルタ済み。
+     描画対象の婚姻ペア配列 [[idA, idB], ...] を返す。重複排除済み。
 
-   collectParentChildMap():
-     描画対象の親→子マップ Map<parentId, [childId, ...]> を返す。
-     重複排除済み。
+   ★★ collectParentUnits()  ← 新規描画はこちらを使う ★★
+     描画対象の「親ユニット」マップを返す:
+       Map<unitKey, { fatherId, motherId, children: [childId, ...] }>
+     unitKey = fatherId + '|' + motherId
+     父母の組合せに紐づく子をまとめる。両親両方が登録されていれば
+     1 ユニット = 1 親子線系統。父母片方のみ登録なら片親アンカー扱い。
+
+   computeParentUnitAnchor(unit, points):
+     親ユニットの線描画アンカー点を points と DOM から算出する:
+       両親両方表示 → .marriage-group[data-couple-key] 要素中央を優先、
+                       要素未取得時は両カードの中点をフォールバック
+       片親のみ表示 → そのカード自身のアンカー
+       どちらも未表示 → null（線を描かない）
 
    drawMarriageLine(pA, pB, isVertical, addPath):
      ペアと座標から婚姻線の SVG パスを 1 本生成する。
 
    drawVerticalParentChildLines / drawHorizontalParentChildLines:
-     親子線の SVG パスを生成する（既存）。
+     親ユニットアンカーと子配列から、共通幹線＋子分岐の SVG パスを生成する。
+     引数 unitAnchor は { cx, cy, rightX, bottomY, hasBoth, ... } を持つ。
 
    pickChildLineClass(person, simpleMode):
      子側 SVG path のクラス（線種）を決定する。
      簡易モード時は親子線で統一。
+
+   collectParentChildMap()  ← 旧 API。後方互換のため残存 ★ 新規描画では使わない ★
+     親個人ID → 子配列。collectParentUnits() に置き換え済み。
 ============================================================ */
 
 function shouldIncludePersonInLines(personId) {
@@ -4986,7 +7543,15 @@ function shouldIncludePersonInLines(personId) {
   // UI が未実装のうちは active=false 固定で動作に影響を与えない。
   const majorOnly = isMajorPersonsOnlyModeActive();
   if (majorOnly) {
-    if (!isMajorPerson(personId)) return false;
+    if (!isMajorPerson(personId)) {
+      // この人物が主要人物でなくても、子のいずれかが主要人物なら線描画に含める
+      // （兄弟姉妹同士の関係は、共通の親経由でしか線で繋げないため、
+      //  父母が「主要人物の橋渡し」として必要）
+      const hasMajorChild = state.persons.some(p =>
+        (p.fatherId === personId || p.motherId === personId)
+        && isMajorPerson(p.id));
+      if (!hasMajorChild) return false;
+    }
   }
   return true;
 }
@@ -5001,15 +7566,43 @@ function isMajorPersonsOnlyModeActive() {
 
 /* ある人物が「主要人物」かどうか判定する。
    現在の定義: 被相続人本人 / 配偶者 / 直系の子・孫（heirCategory が「配偶者」「子」「代襲相続人」）
+   ＋ 第2順位の直系尊属、第3順位の兄弟姉妹も含める
    将来この関数の中身を差し替えれば、線描画の対象集合が自動的に絞られる。 */
 function isMajorPerson(personId) {
   const p = state.persons.find(x => x.id === personId);
   if (!p) return false;
   const dec = findDecedent();
   if (dec && p.id === dec.id) return true;
+
+  // 1) heirCategory ベースの判定（既存ロジック）
   if (p.heirCategory === '配偶者') return true;
   if (p.heirCategory === '子') return true;
   if (p.heirCategory === '代襲相続人') return true;
+  if (p.heirCategory === '直系尊属') return true;
+  if (p.heirCategory === '兄弟姉妹') return true;
+
+  // 2) relation テキストベースの判定（heirCategory 未入力でも続柄から推定）
+  // 簡易TSV取込時など、相続区分が空のまま続柄だけ入っているケースに対応
+  const rel = (p.relation || '').trim();
+  if (rel) {
+    // 配偶者・夫・妻
+    if (/配偶者|夫|妻/.test(rel)) return true;
+    // 子・養子・嫡出子の各種続柄（長男・次男・二男・長女・次女・二女・養子・養女）
+    if (/^(子|長男|次男|二男|三男|四男|五男|長女|次女|二女|三女|四女|五女|養子|養女)/.test(rel)) return true;
+    // 直系尊属
+    if (/^(父|母|祖父|祖母|曽祖父|曽祖母)$/.test(rel)) return true;
+    // 兄弟姉妹
+    if (/^(兄|弟|姉|妹|兄弟姉妹)$/.test(rel)) return true;
+    // 孫・甥・姪は、代襲相続人扱いか第3順位の場合のみ主要候補とする
+    // （第1順位の通常相続では孫は代襲時のみ相続権を持つため）
+    if (/^(孫|甥|姪)/.test(rel)) {
+      if (p.heirCategory === '代襲相続人') return true;
+      const orderSel = document.getElementById('inheritanceOrder');
+      const order = orderSel ? orderSel.value : '1';
+      if (order === '3' && /^(甥|姪)/.test(rel)) return true;
+    }
+  }
+
   return false;
 }
 
@@ -5028,6 +7621,40 @@ function collectMarriagePairs() {
   return pairs;
 }
 
+/* ============================================================
+   親ユニット（fatherId + motherId の組）→ 子配列マップを構築
+   ------------------------------------------------------------
+   個人単位（父→子 / 母→子）の2本線描画ではなく、
+   父母セットを1ユニットとして扱い、1系統の線で子へ繋ぐ。
+   これにより、親子関係ではない人物同士が線でつながって見える誤読を排除する。
+
+   返り値: Map<unitKey, { fatherId, motherId, children: [childId, ...] }>
+   unitKey: fatherId + '|' + motherId（空欄も含む。'P01|P02' / 'P01|' / '|P02' のいずれか）
+============================================================ */
+function collectParentUnits() {
+  const units = new Map();
+  state.persons.forEach(child => {
+    if (!child.id) return;
+    if (!shouldIncludePersonInLines(child.id)) return;
+    const fa = child.fatherId || '';
+    const mo = child.motherId || '';
+    if (!fa && !mo) return; // 両方空欄なら親ユニット不在
+    const unitKey = fa + '|' + mo;
+    if (!units.has(unitKey)) {
+      units.set(unitKey, { fatherId: fa, motherId: mo, children: [] });
+    }
+    const u = units.get(unitKey);
+    if (!u.children.includes(child.id)) u.children.push(child.id);
+  });
+  return units;
+}
+
+/* 旧 API: 後方互換のためのみ残存（外部ツールが参照する可能性に備えて）。
+   返り値: Map<parentId, [childId, ...]>（親個人ID単位）
+   ★ 注意: 新規描画コードでは絶対に使わないこと。
+   ★ 個人単位の親→子マップは父→子＋母→子で重複線を生み、
+   ★ 親子関係ではない人物同士が線でつながって見える誤読の原因となる。
+   ★ 新規描画では collectParentUnits()（fatherId+motherId のユニット単位）を使う。 */
 function collectParentChildMap() {
   const map = new Map();
   state.persons.forEach(child => {
@@ -5067,53 +7694,123 @@ function drawMarriageLine(a, b, isVertical, addPath) {
   }
 }
 
-/* 縦型レイアウト: 親→子の直交接続線
-   - 親カード bottom → 垂直線 → 共通幹線 (水平線) → 各子カード top → 垂直線 */
-function drawVerticalParentChildLines(parent, children, simpleMode, addPath) {
-  // 子の上端で最も上にあるものより少し上に幹線を引く
+/* 親ユニット（夫婦 or 単親）のアンカー点を points から算出
+   返り値: { cx, cy, leftX, rightX, topY, bottomY, hasBoth, fatherPts, motherPts }
+   父母両方が表示されている場合:
+     優先: .marriage-group[data-couple-key] 要素（夫婦をまとめる枠）の矩形中央。
+            余白を含む枠中央から線が出るため、夫婦の中央から自然に線が伸びる見た目。
+     フォールバック: 父母両カードの中点（婚姻グループ DOM が見つからない場合）。
+   父のみ表示 / 母のみ表示: そのカードの点
+   どちらも未表示: null
+   ※ wrapper / wrapperRect は座標系をカードと揃えるために渡す。 */
+function computeParentUnitAnchor(unit, points, wrapper, wrapperRect) {
+  const fa = unit.fatherId ? points.get(unit.fatherId) : null;
+  const mo = unit.motherId ? points.get(unit.motherId) : null;
+  if (!fa && !mo) return null;
+
+  if (fa && mo) {
+    // 婚姻グループ要素を探す。data-couple-key は人物IDのソート結合で記録されている。
+    let mgRect = null;
+    if (wrapper && wrapperRect) {
+      const sortedIds = [unit.fatherId, unit.motherId].sort().join('|');
+      const mg = wrapper.querySelector(
+        '.marriage-group[data-couple-key="' + sortedIds + '"]'
+      );
+      if (mg) {
+        const r = mg.getBoundingClientRect();
+        // wrapper 基準座標に変換（points と同じ系）
+        const x = r.left - wrapperRect.left + wrapper.scrollLeft;
+        const y = r.top - wrapperRect.top + wrapper.scrollTop;
+        mgRect = {
+          cx: x + r.width / 2,
+          cy: y + r.height / 2,
+          leftX: x,
+          rightX: x + r.width,
+          topY: y,
+          bottomY: y + r.height
+        };
+      }
+    }
+    if (mgRect) {
+      return {
+        cx: mgRect.cx, cy: mgRect.cy,
+        leftX: mgRect.leftX, rightX: mgRect.rightX,
+        topY: mgRect.topY, bottomY: mgRect.bottomY,
+        bottomX: mgRect.cx,
+        hasBoth: true,
+        fatherPts: fa, motherPts: mo,
+        source: 'marriage-group'
+      };
+    }
+    // フォールバック: 両カードの中点
+    return {
+      cx: (fa.cx + mo.cx) / 2,
+      cy: (fa.cy + mo.cy) / 2,
+      leftX: Math.min(fa.leftX, mo.leftX),
+      rightX: Math.max(fa.rightX, mo.rightX),
+      topY: Math.min(fa.topY, mo.topY),
+      bottomY: Math.max(fa.bottomY, mo.bottomY),
+      bottomX: (fa.bottomX + mo.bottomX) / 2,
+      hasBoth: true,
+      fatherPts: fa, motherPts: mo,
+      source: 'card-midpoint'
+    };
+  }
+
+  const single = fa || mo;
+  return Object.assign({}, single, {
+    hasBoth: false,
+    fatherPts: fa, motherPts: mo,
+    source: 'single-parent'
+  });
+}
+
+/* 縦型レイアウト: 親ユニット→子の直交接続線
+   親ユニットアンカーから垂直に降りて共通幹線、各子へ分岐。 */
+function drawVerticalParentChildLines(unitAnchor, children, simpleMode, addPath) {
   const childTopY = Math.min.apply(null, children.map(c => c.pts.topY));
-  const gap = childTopY - parent.bottomY;
+  const gap = childTopY - unitAnchor.bottomY;
   if (gap <= 0) return; // 子が親より上にある異常配置は描かない
-  const trunkY = parent.bottomY + gap / 2;
+  const trunkY = unitAnchor.bottomY + gap / 2;
 
-  // (1) 親 bottom → trunk まで垂直線
-  addPath('M' + parent.bottomX + ',' + parent.bottomY + ' V' + trunkY, 'rl-parent');
+  // (1) 親ユニット中央 → trunk まで垂直線
+  // ユニット中央 cx を起点（夫婦の場合は両者中点）
+  addPath('M' + unitAnchor.cx + ',' + unitAnchor.bottomY + ' V' + trunkY, 'rl-parent');
 
-  // (2) 水平幹線: 全子の center.x の最小〜最大
+  // (2) 水平幹線: 全子の center.x の最小〜最大、親 cx も含む
   const xs = children.map(c => c.pts.topX);
   const minX = Math.min.apply(null, xs);
   const maxX = Math.max.apply(null, xs);
-  // 親 cx も含めて幹線範囲を取る（親 cx が左右端外なら延長）
-  const trunkMinX = Math.min(minX, parent.bottomX);
-  const trunkMaxX = Math.max(maxX, parent.bottomX);
+  const trunkMinX = Math.min(minX, unitAnchor.cx);
+  const trunkMaxX = Math.max(maxX, unitAnchor.cx);
   if (trunkMinX !== trunkMaxX) {
     addPath('M' + trunkMinX + ',' + trunkY + ' H' + trunkMaxX, 'rl-parent');
   }
 
-  // (3) 各子 → trunk から垂直線、線種は子の状態で分岐
+  // (3) 各子 → trunk から垂直線
   children.forEach(c => {
     const cls = pickChildLineClass(c.p, simpleMode);
     addPath('M' + c.pts.topX + ',' + trunkY + ' V' + c.pts.topY, cls);
   });
 }
 
-/* 横型レイアウト: 親→子の直交接続線
-   - 親カード right → 水平線 → 列間幹線 (垂直線) → 各子カード left → 水平線 */
-function drawHorizontalParentChildLines(parent, children, simpleMode, addPath) {
-  // 子は親より右側にあると仮定（親世代列→子世代列の流れ）
+/* 横型レイアウト: 親ユニット→子の直交接続線
+   親ユニットアンカーから水平に出て列間幹線、各子へ分岐。 */
+function drawHorizontalParentChildLines(unitAnchor, children, simpleMode, addPath) {
   const firstChild = children[0].pts;
-  if (parent.rightX >= firstChild.leftX) return; // 異常配置は描かない
+  if (unitAnchor.rightX >= firstChild.leftX) return; // 異常配置は描かない
 
   // 列間幹線のX
-  const trunkX = (parent.rightX + firstChild.leftX) / 2;
+  const trunkX = (unitAnchor.rightX + firstChild.leftX) / 2;
 
-  // (1) 親 right → trunk まで水平線
-  addPath('M' + parent.rightX + ',' + parent.cy + ' H' + trunkX, 'rl-parent');
+  // (1) 親ユニット中央 → trunk まで水平線
+  // ユニット cy（夫婦の場合は両者の中点）から
+  addPath('M' + unitAnchor.rightX + ',' + unitAnchor.cy + ' H' + trunkX, 'rl-parent');
 
   // (2) 垂直幹線: 子の center.y の最小〜最大、親 cy も含めて延長
   const ys = children.map(c => c.pts.cy);
-  const trunkMinY = Math.min.apply(null, ys.concat([parent.cy]));
-  const trunkMaxY = Math.max.apply(null, ys.concat([parent.cy]));
+  const trunkMinY = Math.min.apply(null, ys.concat([unitAnchor.cy]));
+  const trunkMaxY = Math.max.apply(null, ys.concat([unitAnchor.cy]));
   if (trunkMinY !== trunkMaxY) {
     addPath('M' + trunkX + ',' + trunkMinY + ' V' + trunkMaxY, 'rl-parent');
   }
@@ -5245,6 +7942,12 @@ function refreshPreview() {
 
   if (simple) printArea.classList.add('simple-mode');
   else printArea.classList.remove('simple-mode');
+
+  // カード密度プリセット最小 → CSS 制御クラスを container に付与
+  ['card-preset-minimum'].forEach(c => container.classList.remove(c));
+  if (state._currentCardPreset === 'minimum') {
+    container.classList.add('card-preset-minimum');
+  }
 
   // === ページ1: 相続関係図 ===
   const page1 = document.createElement('div');
