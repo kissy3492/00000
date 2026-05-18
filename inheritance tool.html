@@ -2509,6 +2509,42 @@ const WP_LABEL_MAP = {
   '職業': 'occupation'
 };
 
+/* ★ 日付認識・正規化 — 既存 parseDate() と整合させる ★
+   対応形式:
+   ・和暦略称1文字: R5.5.5 / H30.1.1 / S45.12.3 / M10.1.1 / T9.1.1
+   ・和暦正式名: 令和5年5月5日 / 平成30年1月1日 / 昭和45年12月3日 / 明治10年1月1日 / 大正9年1月1日
+   ・和暦+区切り: 令和5/5/5 / 平成30.1.1 等
+   ・西暦: 2024-05-01 / 2024/5/1 / 2024年5月1日 */
+const WP_DATE_RE = /^(?:[MTSHRmtshr明大昭平令]\d{1,2}[.\-/]\d{1,2}[.\-/]\d{1,2}|(?:令和|平成|昭和|大正|明治)\s*\d{1,2}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日?|(?:令和|平成|昭和|大正|明治)\d{1,2}[.\-/]\d{1,2}[.\-/]\d{1,2}|\d{4}[.\-/年]\d{1,2}[.\-/月]\d{1,2}日?)$/;
+
+/* 抽出後の日付文字列を、人物テーブルで使いやすい R5.5.5 形式へ正規化。
+   parseDate() で解釈できないものは入力そのままを返す（手動修正の余地を残す）。 */
+function _wpNormalizeDate(s) {
+  if (!s) return '';
+  const t = String(s).trim();
+  if (!t) return '';
+  // 「令和5年5月5日」「平成30年1月1日」等の正式表記 → R5.5.5 形式
+  const m = t.match(/^(令和|平成|昭和|大正|明治)\s*(\d{1,2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?$/);
+  if (m) {
+    const eraMap = { '令和': 'R', '平成': 'H', '昭和': 'S', '大正': 'T', '明治': 'M' };
+    return eraMap[m[1]] + m[2] + '.' + m[3] + '.' + m[4];
+  }
+  // 「令和5/5/5」等 → R5.5.5
+  const m2 = t.match(/^(令和|平成|昭和|大正|明治)(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{1,2})$/);
+  if (m2) {
+    const eraMap = { '令和': 'R', '平成': 'H', '昭和': 'S', '大正': 'T', '明治': 'M' };
+    return eraMap[m2[1]] + m2[2] + '.' + m2[3] + '.' + m2[4];
+  }
+  // それ以外（R5.5.5/西暦/etc）はそのまま返す
+  return t;
+}
+
+/* 行内に死亡/転入/転出 等の原因語があるか検出（先頭にトークン分割した結果から）。 */
+const WP_CAUSE_DEATH = /^(死亡)$/;
+const WP_CAUSE_ADDR_START = /^(転入|住定|住所設定|住民登録)$/;
+const WP_CAUSE_ADDR_END = /^(転出|転居|除票|消除)$/;
+const WP_CAUSE_ANY = /^(死亡|転入|住定|住所設定|住民登録|転出|転居|除票|消除|出生|婚姻|離婚|除籍|入籍)$/;
+
 /* 貼付テキストを解析し、登録候補を返す（モード指定可）。
    外部通信なし・ブラウザメモリのみで処理する純粋関数。
    mode:
@@ -2531,18 +2567,40 @@ function parseWorkplaceSystemPaste(text, mode) {
   if (mode === 'table')  return _wpTryTable(rawLines)   || _wpEmpty('table');
   if (mode === 'multi')  return _wpTryMultiNoHeader(rawLines, true) || _wpEmpty('multi-no-header');
   if (mode === 'single') return _wpTryLabeled(rawLines) || _wpEmpty('labeled');
+  if (mode === 'lineTokens') {
+    // 強制時: 候補0件でも tokens 付き結果を返す（UIで未割当トークン表示）
+    return _wpTryLineTokens(rawLines, true);
+  }
 
   // ★ 自動判定: 厳密なものから先に試す（先勝ち）★
-  // 1) 表形式: 「氏名+性別/生年月日」のヘッダ行 + データ行2列以上 が必要 — 最も厳密
-  // 2) ラベル付き: 「氏名: ...」「番号: ...」が1つでもあれば適用
+  // 0) 1行に潰れた入力（非空行 ≤ 2 件 AND ラベル形式の手がかりなし）→ LineTokens を優先
+  //    実務の貼付データは 1行に潰れて空欄混じり、ラベルキーワードも無いことが多いため
+  // 1) 表形式: 「氏名+性別/生年月日」のヘッダ行 + データ行2列以上 — 最も厳密
+  // 2) ラベル付き: 「氏名: ...」「番号: ...」「氏名　田中太郎」等のラベル形式
   // 3) ヘッダ無し複数人: 「日付+性別/氏名」のような人物行が2つ以上必要
-  // 4) ヒューリスティック: 何も該当しない場合のフォールバック
+  // 4) 1行トークン解析: 1行内の混在情報を意味分類で抽出
+  // 5) ヒューリスティック: フォールバック
+  const nonBlankCount = rawLines.filter(l => l.trim()).length;
+  // ラベル手がかり: いずれかの行が既知ラベル名で始まり、後ろに区切り（:/：/\t/空白）が続く
+  const labelKeysEsc = Object.keys(WP_LABEL_MAP).map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const labelHintRe = new RegExp('^(' + labelKeysEsc.join('|') + ')(\\s|\\t|:|：|$)');
+  const hasLabelHint = rawLines.some(l => labelHintRe.test(l.trim()));
+  const lineTokensFirst = (nonBlankCount > 0 && nonBlankCount <= 2 && !hasLabelHint);
+
   const tableR = _wpTryTable(rawLines);
   if (tableR && tableR.candidates.length > 0) return tableR;
+  if (lineTokensFirst) {
+    const ltR0 = _wpTryLineTokens(rawLines, false);
+    if (ltR0 && ltR0.candidates.length > 0) return ltR0;
+  }
   const labeledR = _wpTryLabeled(rawLines);
   if (labeledR && labeledR.candidates.length > 0) return labeledR;
   const multiR = _wpTryMultiNoHeader(rawLines, false);
   if (multiR && multiR.candidates.length > 0) return multiR;
+  if (!lineTokensFirst) {
+    const ltR = _wpTryLineTokens(rawLines, false);
+    if (ltR && ltR.candidates.length > 0) return ltR;
+  }
   return _wpTryHeuristic(rawLines) || _wpEmpty('heuristic');
 }
 
@@ -2616,24 +2674,86 @@ function _wpTryTable(rawLines) {
 
 /* ===== B) ラベル付きパーサ（"氏名: ..."）===== */
 function _wpTryLabeled(rawLines) {
-  const labelPattern = '^(' + Object.keys(WP_LABEL_MAP)
-    .map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')\\s*[:：]\\s*(.+)$';
-  const labelRe = new RegExp(labelPattern);
+  const labelKeys = Object.keys(WP_LABEL_MAP);
+  const labelEsc = labelKeys
+    .map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .sort((a, b) => b.length - a.length); // 長いラベル優先（'カナ氏名'を'カナ'より先に）
+  // パターン優先度:
+  //   1) コロン区切り: 「氏名: 田中太郎」「氏名：田中太郎」  — 最も明示的
+  //   2) タブ区切り: 「氏名\t田中太郎」                       — 表計算ソフトからの貼付
+  //   3) 複数空白区切り(2+): 「氏名  田中太郎」              — 整列されたコピー
+  //   4) 単一空白区切り: 「氏名 田中太郎」                    — ただし値が他ラベル開始ではない場合のみ
+  //   5) 単独ラベル + 次行に値: 「氏名\n田中太郎」           — 改行を挟むパターン
+  const reColon  = new RegExp('^(' + labelEsc.join('|') + ')\\s*[:：]\\s*(.+)$');
+  const reTab    = new RegExp('^(' + labelEsc.join('|') + ')\\t+(.+)$');
+  const reMulti  = new RegExp('^(' + labelEsc.join('|') + ')\\s{2,}(.+)$');
+  const reSingle = new RegExp('^(' + labelEsc.join('|') + ')\\s+(\\S.*)$');
+  const reBare   = new RegExp('^(' + labelEsc.join('|') + ')\\s*$');
+
+  // 値が他のラベル名で始まるか（誤認防止：表ヘッダ「氏名 性別 生年月日」など）
+  const valueStartsWithLabel = (val) => {
+    for (const lbl of labelKeys) {
+      if (val === lbl) return true;
+      // 値の先頭がラベル名 + 区切り文字（空白/タブ/コロン）
+      if (val.length > lbl.length && val.startsWith(lbl)) {
+        const next = val[lbl.length];
+        if (next === ' ' || next === '\t' || next === ':' || next === '：' || next === '　') return true;
+      }
+    }
+    return false;
+  };
 
   const labeledRecords = [];
   let currentRec = null;
+  let pendingLabel = null;  // 単独ラベル行から次行を待つ
   let blankCount = 0;
   const closeCurrent = () => {
     if (currentRec && Object.keys(currentRec.fields).length > 0) labeledRecords.push(currentRec);
     currentRec = null;
+    pendingLabel = null;
   };
 
   rawLines.forEach((line, idx) => {
     const t = line.trim();
     const lineNo = idx + 1;
-    if (!t) { blankCount++; if (blankCount >= 1) closeCurrent(); return; }
+    if (!t) {
+      blankCount++;
+      if (blankCount >= 1) closeCurrent();
+      return;
+    }
     blankCount = 0;
-    const m = t.match(labelRe);
+
+    // 直前が単独ラベル行 → 本行を値として取り込み
+    if (pendingLabel) {
+      const field = WP_LABEL_MAP[pendingLabel];
+      if (!currentRec || (currentRec.fields[field] && (field === 'number' || field === 'name'))) {
+        closeCurrent();
+        currentRec = { fields: {}, sourceLines: [] };
+      }
+      currentRec.fields[field] = t;
+      currentRec.sourceLines.push({ no: lineNo, text: t, field });
+      pendingLabel = null;
+      return;
+    }
+
+    // 各パターンを優先順に試す
+    let m = t.match(reColon) || t.match(reTab) || t.match(reMulti);
+    if (!m) {
+      const ms = t.match(reSingle);
+      if (ms && !valueStartsWithLabel(ms[2].trim())) m = ms;
+    }
+    if (!m) {
+      const mb = t.match(reBare);
+      if (mb) {
+        // 単独ラベル — 次行を待つ
+        pendingLabel = mb[1];
+        // レコードがまだなら開始
+        if (!currentRec) currentRec = { fields: {}, sourceLines: [] };
+        currentRec.sourceLines.push({ no: lineNo, text: t });
+        return;
+      }
+    }
+
     if (m) {
       const label = m[1], value = m[2].trim(), field = WP_LABEL_MAP[label];
       if (!currentRec || (currentRec.fields[field] && (field === 'number' || field === 'name'))) {
@@ -2650,6 +2770,12 @@ function _wpTryLabeled(rawLines) {
 
   if (labeledRecords.length === 0) return null;
   const result = { candidates: [], commonAddress: '', mode: 'labeled', sourceLineCount: rawLines.length };
+  // ★ ラベル抽出値の日付正規化（令和X年Y月Z日 → RX.Y.Z） ★
+  labeledRecords.forEach(r => {
+    ['birth', 'death', 'causeDate'].forEach(f => {
+      if (r.fields[f]) r.fields[f] = _wpNormalizeDate(r.fields[f]);
+    });
+  });
   result.candidates = labeledRecords.map(r => _wpBuildCandidate(r));
   if (result.candidates.length > 1) {
     const addresses = result.candidates.map(c => c.address).filter(a => a);
@@ -2693,7 +2819,8 @@ function _wpTryMultiNoHeader(rawLines, force) {
 
   // 自動判定時は「人物行らしい」行が2つ以上必要
   const looksLikePerson = (t) =>
-    /[RHST明大昭平令]\s*\d{1,2}[.\-/年]\s*\d{1,2}[.\-/月]\s*\d{1,2}/.test(t)
+    (/[MTSHRmtshr明大昭平令]\d{1,2}[.\-/]\d{1,2}[.\-/]\d{1,2}/.test(t)
+      || /(令和|平成|昭和|大正|明治)\s*\d{1,2}\s*年\s*\d{1,2}\s*月\s*\d{1,2}/.test(t))
       && (/[男女]/.test(t) || /[一-龥々ヵヶ]{2,}/.test(t));
   if (!force) {
     const personLikeCount = personLines.filter(l => looksLikePerson(l.text)).length;
@@ -2722,25 +2849,36 @@ function _wpParsePersonRow(text, lineNo) {
   const rec = { fields: {}, sourceLines: [{ no: lineNo, text }] };
   const used = new Array(tokens.length).fill(false);
 
-  const dateRe = /^[RHST明大昭平令]\s*\d{1,2}[.\-/年]\s*\d{1,2}[.\-/月]\s*\d{1,2}/;
   const relationWord = /^(妻|夫|配偶者|長男|二男|三男|四男|長女|二女|三女|四女|子|父|母|兄|弟|姉|妹|養子|養女|甥|姪|孫|祖父|祖母|被相続人)$/;
   const householdWord = /^(世帯主|戸主|世帯員|本人)$/;
-  const causeWord = /^(死亡|転入|住定|住所設定|転居|出生|婚姻|離婚|転出|除籍|入籍|住民登録|除票|消除)$/;
 
+  // ★ Pass A: 行内に原因語（死亡/転入/転出 等）があるか先に確定 ★
+  // 原因語がある場合、最初の日付を「無条件で生年月日」へ寄せず、
+  // 原因の種別に応じて死亡日 / 住所開始日 / 住所終了日 / 日付候補 へ振り分ける。
+  let lineCause = '';
+  for (let i = 0; i < tokens.length; i++) {
+    if (WP_CAUSE_ANY.test(tokens[i])) {
+      lineCause = tokens[i];
+      break;
+    }
+  }
+  // 日付トークンを全部集める（順序保持）
+  const dateIndices = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (WP_DATE_RE.test(tokens[i])) dateIndices.push(i);
+  }
+
+  // ★ Pass B: 日付以外のトークンを分類 ★
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i];
-    if (dateRe.test(tok)) {
-      if (!rec.fields.birth) rec.fields.birth = tok;
-      else if (!rec.fields.causeDate) rec.fields.causeDate = tok;
-      used[i] = true;
-    } else if (/^[男女]$/.test(tok)) {
+    if (dateIndices.indexOf(i) >= 0) continue; // 日付は後で処理
+    if (/^[男女]$/.test(tok)) {
       rec.fields.gender = tok; used[i] = true;
     } else if (householdWord.test(tok)) {
       rec.fields.householdInfo = tok; used[i] = true;
     } else if (relationWord.test(tok)) {
       rec.fields.relation = tok; used[i] = true;
-    } else if (causeWord.test(tok)) {
-      // 異動情報として記録 + cause も埋める
+    } else if (WP_CAUSE_ANY.test(tok)) {
       rec.fields.cause = tok;
       rec.fields.transferInfo = (rec.fields.transferInfo ? rec.fields.transferInfo + ' ' : '') + tok;
       used[i] = true;
@@ -2752,6 +2890,25 @@ function _wpParsePersonRow(text, lineNo) {
     }
   }
 
+  // ★ Pass C: 日付の振り分け（原因語の有無で挙動を変える）★
+  // 原因語あり:
+  //   1個目の日付 → 原因日付（→ 後で死亡日/住所開始日/住所終了日 に自動振分）
+  //   2個目の日付 → 生年月日
+  // 原因語なし:
+  //   1個目の日付 → 生年月日
+  //   2個目の日付 → 日付候補（causeDate のまま、確認画面で手動振分）
+  if (lineCause) {
+    const normalized = dateIndices.map(i => _wpNormalizeDate(tokens[i]));
+    if (normalized.length >= 1) rec.fields.causeDate = normalized[0];
+    if (normalized.length >= 2) rec.fields.birth = normalized[1];
+    dateIndices.forEach(i => used[i] = true);
+  } else {
+    const normalized = dateIndices.map(i => _wpNormalizeDate(tokens[i]));
+    if (normalized.length >= 1) rec.fields.birth = normalized[0];
+    if (normalized.length >= 2) rec.fields.causeDate = normalized[1];
+    dateIndices.forEach(i => used[i] = true);
+  }
+
   // 残ったトークンを集約: CJK含む → 氏名、それ以外 → 備考
   const leftover = [];
   for (let i = 0; i < tokens.length; i++) if (!used[i]) leftover.push(tokens[i]);
@@ -2760,11 +2917,315 @@ function _wpParsePersonRow(text, lineNo) {
   if (cjkTokens.length > 0) rec.fields.name = cjkTokens.join(' ');
   if (otherTokens.length > 0) rec.fields.note = otherTokens.join(' ');
 
-  if (!rec.fields.name && !rec.fields.birth) return null;
+  if (!rec.fields.name && !rec.fields.birth && !rec.fields.causeDate) return null;
   return rec;
 }
 
 /* ===== D) ヒューリスティック フォールバック ===== */
+/* ===== E) 1行トークン解析パーサ ===== 
+   実務の貼付データは 1行に潰れたり、項目位置がずれていたり、空欄が混じる。
+   この解析は次の戦略で動く:
+   1) タブ区切りなら位置保持で分割（空欄を保持してテンプレ順で照合可能に）
+   2) タブが無ければ各種区切り（タブ/全角スペース/連続半角スペース/カンマ/読点/縦棒）で分割
+   3) 各トークンを意味的に分類（番号/日付/性別/原因/続柄/世帯/カナ/住所/CJK氏名/不明）
+   4) 連続する住所断片は再結合
+   5) 1行内に複数人連結があれば「日付+性別」「氏名後の新日付」等を境界として分割
+   6) 各候補に割当理由（_reasons）を付与してUIで明示
+   force=true でも 0件可（UI で未割当トークン表示用） */
+function _wpTryLineTokens(rawLines, force) {
+  const result = { candidates: [], commonAddress: '', mode: 'line-tokens',
+                   sourceLineCount: rawLines.length, tokens: [] };
+
+  // 各行をトークン化
+  rawLines.forEach((line, lineIdx) => {
+    if (!line.trim()) return;
+    const lineNo = lineIdx + 1;
+    const hasTabs = line.indexOf('\t') >= 0;
+    let cells;
+    if (hasTabs) {
+      // タブ区切り: 位置保持（空欄も含めて）
+      cells = line.split('\t').map((c, i) => ({
+        raw: c, value: c.trim(), position: i, delimiter: 'tab', lineNo
+      }));
+    } else {
+      // 非タブ: 各種区切りで分割（空セルは詰める）
+      const split = line.split(/[　,，、|｜]+|[ ]+/).filter(s => s.length > 0);
+      cells = split.map((c, i) => ({
+        raw: c, value: c.trim(), position: i, delimiter: 'space', lineNo
+      }));
+    }
+    // 意味分類
+    cells.forEach(c => {
+      const cls = _wpClassifyToken(c.value);
+      c.kind = cls.kind;
+      c.normalized = cls.normalized || c.value;
+    });
+
+    // ★ テンプレート位置ヒント（タブ区切りで cells.length が template に近い場合のみ） ★
+    // 想定順: 番号 / 情報 / 生年月日 / 性別 / 原因 / 日付 / カナ氏名 / 氏名 / 住所
+    // 位置1 (情報) は意味的にカナと判定されても note 扱いへデモート
+    // 位置6 (カナ氏名) の短いカナは name 候補ではなく kana 確定にする
+    if (hasTabs && cells.length >= 6) {
+      const TEMPLATE = ['number', 'info', 'birth', 'gender', 'cause', 'causeDate', 'kana', 'name', 'address'];
+      cells.forEach((c, idx) => {
+        if (idx >= TEMPLATE.length) return;
+        const expected = TEMPLATE[idx];
+        // 「情報」スロット: カナ等が来てもメモ扱い（hasName=true 誤判定を防止）
+        if (expected === 'info' && (c.kind === 'kana' || c.kind === 'name-cjk') && c.value) {
+          c.kind = 'cjk-other';
+          c._templateHint = '情報スロット(位置1)';
+        }
+      });
+    }
+
+    // 住所断片の再結合: 連続する address-part / cjk-other を 1 つの address にまとめる
+    const merged = [];
+    let buf = null;
+    cells.forEach(c => {
+      if (c.kind === 'address-part') {
+        if (buf && buf.kind === 'address-part') {
+          buf.value = buf.value + ' ' + c.value;
+          buf.merged = (buf.merged || 1) + 1;
+        } else {
+          if (buf) merged.push(buf);
+          buf = Object.assign({}, c);
+        }
+      } else if (buf && buf.kind === 'address-part' && c.kind === 'cjk-other' && c.value.length <= 8) {
+        // 住所末尾の建物名等を吸収
+        buf.value = buf.value + ' ' + c.value;
+      } else {
+        if (buf) { merged.push(buf); buf = null; }
+        merged.push(c);
+      }
+    });
+    if (buf) merged.push(buf);
+    result.tokens.push(...merged);
+
+    // 1行内に複数人連結があるかを検出して分割
+    const groups = _wpSplitGroupsByBoundary(merged);
+    groups.forEach(group => {
+      const rec = _wpBuildRecordFromGroup(group);
+      if (rec) {
+        result.candidates.push(_wpFinalizeLineTokensCandidate(rec));
+      }
+    });
+  });
+
+  // 共通住所処理: 1人目に住所、後続に住所なし → 共通住所として仮付与
+  if (result.candidates.length > 1) {
+    const firstAddr = result.candidates[0].address;
+    if (firstAddr) {
+      const othersHaveNoAddr = result.candidates.slice(1).every(c => !c.address);
+      if (othersHaveNoAddr) {
+        result.commonAddress = firstAddr;
+        for (let i = 1; i < result.candidates.length; i++) {
+          result.candidates[i].address = firstAddr;
+          result.candidates[i].addressFromCommon = true;
+          result.candidates[i]._reasons = result.candidates[i]._reasons || {};
+          result.candidates[i]._reasons.address = '共通住所から自動付与（1人目と同じ）';
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+/* トークンの意味分類。
+   戻り値: { kind, normalized? }
+   kinds: empty/date/gender/cause/relation/household/number/kana/address-part/name-cjk/cjk-other/unknown */
+function _wpClassifyToken(tok) {
+  if (!tok || !tok.trim()) return { kind: 'empty' };
+  const t = String(tok).trim();
+  // 日付（和暦略称1文字 / 和暦正式名 / 西暦）
+  if (/^[MTSHRmtshr明大昭平令]\d{1,2}[.\-/]\d{1,2}[.\-/]\d{1,2}$/.test(t) ||
+      /^(令和|平成|昭和|大正|明治)\s*\d{1,2}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日?$/.test(t) ||
+      /^(令和|平成|昭和|大正|明治)\d{1,2}[.\-/]\d{1,2}[.\-/]\d{1,2}$/.test(t) ||
+      /^\d{4}[.\-/]\d{1,2}[.\-/]\d{1,2}$/.test(t)) {
+    return { kind: 'date', normalized: _wpNormalizeDate(t) };
+  }
+  if (/^[男女]$/.test(t)) return { kind: 'gender' };
+  if (WP_CAUSE_ANY.test(t)) return { kind: 'cause' };
+  if (/^(世帯主|戸主|世帯員|本人)$/.test(t)) return { kind: 'household' };
+  if (/^(妻|夫|配偶者|長男|二男|三男|四男|長女|二女|三女|四女|子|父|母|兄|弟|姉|妹|養子|養女|甥|姪|孫|祖父|祖母|被相続人)$/.test(t)) {
+    return { kind: 'relation' };
+  }
+  if (/^\d{4,}$/.test(t)) return { kind: 'number' };
+  // カナ氏名: 全文カタカナ（伸ばし棒・空白可）
+  if (/^[ァ-ヶー][ァ-ヶー\s]*$/.test(t) && t.replace(/\s+/g, '').length >= 2) {
+    return { kind: 'kana' };
+  }
+  // 住所断片: 都道府県 / 市区町村 / 丁目 / 番地 / 大字 / アパート等の手がかり
+  const addrHint = /(都|道|府|県|市|区|町|村|丁目|番地|番|号|大字|字|アパート|マンション|ハイツ|コーポ|ビル|団地|荘)/;
+  if (addrHint.test(t) || /^〒?\s*\d{3}-?\d{4}/.test(t)) return { kind: 'address-part' };
+  // 日本語氏名らしい（CJK 2-5文字 又は CJK + 空白 + CJK）
+  if (/^[一-龥々ヵヶ]{2,5}$/.test(t) || /^[一-龥々ヵヶ]{1,5}\s+[一-龥々ヵヶ]{1,5}$/.test(t)) {
+    return { kind: 'name-cjk' };
+  }
+  if (/[一-龥々ヵヶ]/.test(t)) return { kind: 'cjk-other' };
+  return { kind: 'unknown' };
+}
+
+/* トークン列を「人物単位」のグループに分割。
+   境界ルール（簡素化）:
+   ・現在のグループに name が確定済み AND 次が date/gender/household/relation
+     → 新しい人物の開始（鉄板パターン: 田中太郎 → S28.3.3 男 妻 田中花子...）
+   ・hasName 未確定での date 重複だけでは分割しない
+     （単人物の「生年月日＋原因日付」の2日付ケースを誤分割しない）*/
+function _wpSplitGroupsByBoundary(tokens) {
+  const groups = [];
+  let cur = [];
+  let curState = { hasName: false, hasDate: false, hasGender: false };
+  const resetState = () => ({ hasName: false, hasDate: false, hasGender: false });
+
+  tokens.forEach(tk => {
+    let startNew = false;
+    if (curState.hasName && (tk.kind === 'date' || tk.kind === 'gender' || tk.kind === 'household' || tk.kind === 'relation')) {
+      startNew = true;
+    }
+    if (startNew && cur.length > 0) {
+      groups.push(cur);
+      cur = [];
+      curState = resetState();
+    }
+    cur.push(tk);
+    if (tk.kind === 'name-cjk' || tk.kind === 'kana') curState.hasName = true;
+    if (tk.kind === 'date') curState.hasDate = true;
+    if (tk.kind === 'gender') curState.hasGender = true;
+  });
+  if (cur.length > 0) groups.push(cur);
+  return groups;
+}
+
+/* グループ（人物単位のトークン列）→ レコード（_reasons 付き）。 */
+function _wpBuildRecordFromGroup(tokens) {
+  if (tokens.length === 0) return null;
+  const rec = {
+    fields: {}, _reasons: {},
+    sourceLines: [{ no: tokens[0].lineNo, text: tokens.map(t => t.value).join(' ') }]
+  };
+
+  // 行内に原因語があるか先に確定（日付振分けの判断材料）
+  let groupCause = '';
+  tokens.forEach(t => { if (t.kind === 'cause' && !groupCause) groupCause = t.value; });
+  // 日付トークンを集める（順序保持）
+  const dateTokens = tokens.filter(t => t.kind === 'date');
+
+  // 日付以外のトークンを分類
+  let lastKind = null;
+  tokens.forEach(tk => {
+    if (tk.kind === 'date') { lastKind = tk.kind; return; }
+    switch (tk.kind) {
+      case 'gender':
+        rec.fields.gender = tk.value;
+        rec._reasons.gender = '性別記号';
+        break;
+      case 'cause':
+        rec.fields.cause = tk.value;
+        rec._reasons.cause = '原因語';
+        rec.fields.transferInfo = (rec.fields.transferInfo ? rec.fields.transferInfo + ' ' : '') + tk.value;
+        break;
+      case 'household':
+        rec.fields.householdInfo = tk.value;
+        rec._reasons.householdInfo = '世帯情報語';
+        break;
+      case 'relation':
+        rec.fields.relation = tk.value;
+        rec._reasons.relation = '続柄語';
+        break;
+      case 'number':
+        if (!rec.fields.number) {
+          rec.fields.number = tk.value;
+          rec._reasons.number = '4桁以上の数字';
+        }
+        break;
+      case 'kana':
+        if (!rec.fields.kana) {
+          rec.fields.kana = tk.value;
+          rec._reasons.kana = 'カタカナのみ';
+        }
+        break;
+      case 'address-part':
+        rec.fields.address = (rec.fields.address ? rec.fields.address + ' ' : '') + tk.value;
+        rec._reasons.address = '市区町村等を含む';
+        break;
+      case 'name-cjk': {
+        const r = (lastKind === 'kana') ? 'カナ氏名の直後' : '漢字氏名らしい（短い日本語）';
+        if (!rec.fields.name) {
+          rec.fields.name = tk.value;
+          rec._reasons.name = r;
+        } else {
+          rec.fields.name += ' ' + tk.value;
+          rec._reasons.name = (rec._reasons.name || '') + ' + 続CJK';
+        }
+        break;
+      }
+      case 'cjk-other':
+        if (!rec.fields.note) rec.fields.note = tk.value;
+        else rec.fields.note += ' ' + tk.value;
+        if (!rec._reasons.note) rec._reasons.note = 'CJK断片（分類不明）';
+        break;
+      case 'unknown':
+        if (tk.value) {
+          if (!rec.fields.note) rec.fields.note = tk.value;
+          else rec.fields.note += ' ' + tk.value;
+          if (!rec._reasons.note) rec._reasons.note = '不明トークン';
+        }
+        break;
+    }
+    lastKind = tk.kind;
+  });
+
+  // 日付振分け（原因の有無で挙動を変える）
+  if (groupCause) {
+    const normalized = dateTokens.map(t => t.normalized || t.value);
+    if (normalized.length === 1) {
+      // 1日付 + 原因 → 原因日付（causeDate）として扱う
+      rec.fields.causeDate = normalized[0];
+      rec._reasons.causeDate = '原因=' + groupCause + ' に紐付く日付';
+    } else if (normalized.length >= 2) {
+      // 2日付以上 + 原因 → 1個目=生年月日（古い）、2個目以降=原因日付
+      rec.fields.birth = normalized[0];
+      rec._reasons.birth = '1番目の日付（原因あり: 生年月日と推定）';
+      rec.fields.causeDate = normalized[1];
+      rec._reasons.causeDate = '2番目の日付（原因=' + groupCause + ' に紐付く）';
+    }
+  } else {
+    const normalized = dateTokens.map(t => t.normalized || t.value);
+    if (normalized.length >= 1) {
+      rec.fields.birth = normalized[0];
+      rec._reasons.birth = '最初の日付（原因語なし）';
+    }
+    if (normalized.length >= 2) {
+      rec.fields.causeDate = normalized[1];
+      rec._reasons.causeDate = '2番目の日付（未確定）';
+    }
+  }
+
+  if (!rec.fields.name && !rec.fields.birth && !rec.fields.causeDate && !rec.fields.kana) return null;
+  return rec;
+}
+
+/* レコード → 候補オブジェクト（_reasons を保持しつつ _wpBuildCandidate の処理を適用） */
+function _wpFinalizeLineTokensCandidate(rec) {
+  const cand = _wpBuildCandidate(rec);
+  cand._reasons = rec._reasons || {};
+  // _wpBuildCandidate が causeDate → death/addressStart/addressEnd に振り分けるが、
+  // _reasons は元の causeDate に紐付いていたので、移ったフィールドにも理由をコピー
+  if (rec.fields.cause && rec.fields.causeDate) {
+    if (/死亡/.test(rec.fields.cause) && cand.death === rec.fields.causeDate) {
+      cand._reasons.death = '原因=死亡 の直後の日付';
+    } else if (/(転入|住定|住所設定|住民登録)/.test(rec.fields.cause) && cand.addressStart === rec.fields.causeDate) {
+      cand._reasons.addressStart = '原因=' + rec.fields.cause + ' の直後の日付';
+    } else if (/(転出|転居|除票|消除)/.test(rec.fields.cause) && cand.addressEnd === rec.fields.causeDate) {
+      cand._reasons.addressEnd = '原因=' + rec.fields.cause + ' の直後の日付';
+    }
+  }
+  return cand;
+}
+
+/* ===== F) ヒューリスティック フォールバック =====
+   ブランク行で区切られたブロックごとに、行内容を推測でフィールドへ。 */
 function _wpTryHeuristic(rawLines) {
   const result = { candidates: [], commonAddress: '', mode: 'heuristic', sourceLineCount: rawLines.length };
   const blocks = [];
@@ -2949,7 +3410,8 @@ function showWorkplacePasteModal() {
     + '<label style="margin-right:10px; cursor:pointer;"><input type="radio" name="wpMode" value="auto" checked> 自動判定</label>'
     + '<label style="margin-right:10px; cursor:pointer;"><input type="radio" name="wpMode" value="single"> 1人分の詳細</label>'
     + '<label style="margin-right:10px; cursor:pointer;"><input type="radio" name="wpMode" value="multi"> 同一住所の複数人</label>'
-    + '<label style="margin-right:10px; cursor:pointer;"><input type="radio" name="wpMode" value="table"> 表形式</label>';
+    + '<label style="margin-right:10px; cursor:pointer;"><input type="radio" name="wpMode" value="table"> 表形式</label>'
+    + '<label style="margin-right:10px; cursor:pointer;"><input type="radio" name="wpMode" value="lineTokens"> 1行トークン解析</label>';
   box.appendChild(modeRow);
 
   // 貼付欄
@@ -3020,9 +3482,17 @@ function _wpRenderCandidates(result, container, modalOverlay) {
   container.innerHTML = '';
   if (!result || !result.candidates || result.candidates.length === 0) {
     const empty = document.createElement('div');
-    empty.style.cssText = 'padding:12px; background:#fef8f5; border-left:3px solid #d35400; color:#6b3a18; font-size:11.5px; border-radius:0 3px 3px 0;';
-    empty.textContent = '解析できる候補がありません。貼付内容の形式・解析モードを確認してください。';
+    empty.style.cssText = 'padding:12px; background:#fef8f5; border-left:3px solid #d35400; color:#6b3a18; font-size:11.5px; border-radius:0 3px 3px 0; margin-bottom:10px;';
+    empty.innerHTML = '<strong>解析できる候補がありません。</strong> 貼付内容の形式・解析モードを確認してください。'
+      + '<br>下の「手動で候補を追加」ボタンで、空のレコードを作って手入力することもできます。';
     container.appendChild(empty);
+    // ★ 未割当トークン一覧を表示（lineTokens モード由来 result.tokens があれば） ★
+    if (result && result.tokens && result.tokens.length > 0) {
+      _wpRenderTokenList(container, result.tokens);
+    }
+    // 手動追加ボタンと空候補テーブルを表示（ユーザーが手入力で作成できるように）
+    const manualBlock = _wpRenderManualOnlyBlock(modalOverlay);
+    container.appendChild(manualBlock);
     return;
   }
 
@@ -3038,6 +3508,7 @@ function _wpRenderCandidates(result, container, modalOverlay) {
     labeled: 'ラベル付き（氏名: ... 形式）',
     table: '表形式（ヘッダー行 + データ行）',
     'multi-no-header': '同一住所の複数人（ヘッダー無し）',
+    'line-tokens': '1行トークン解析（意味分類）',
     heuristic: '推測モード（ヒューリスティック）',
     empty: '(未解析)'
   }[result.mode] || result.mode;
@@ -3063,12 +3534,13 @@ function _wpRenderCandidates(result, container, modalOverlay) {
   tableWrap.style.cssText = 'overflow-x:auto; margin-bottom:6px;';
   const table = document.createElement('table');
   table.className = 'wp-candidates-table';
-  table.style.cssText = 'width:100%; border-collapse:collapse; font-size:11.5px; min-width:1100px;';
+  table.style.cssText = 'width:100%; border-collapse:collapse; font-size:11.5px; min-width:1350px;';
   const thead = document.createElement('thead');
   thead.innerHTML = '<tr style="background:#2b3a4a; color:#fff;">'
     + '<th style="padding:5px 6px; width:46px;"><label style="cursor:pointer;"><input type="checkbox" id="wpCheckAll" checked> 登録</label></th>'
     + '<th style="padding:5px 6px; width:54px;">信頼度</th>'
     + '<th style="padding:5px 6px; width:54px;">重複</th>'
+    + '<th style="padding:5px 6px; width:100px;" title="重複候補に対する登録時動作の指定">動作</th>'
     + '<th style="padding:5px 6px; width:42px;" title="住所＋住所開始日候補が揃っているか">住所履歴</th>'
     + '<th style="padding:5px 6px; width:52px;">元行</th>'
     + '<th style="padding:5px 6px; min-width:110px;">氏名 *</th>'
@@ -3080,6 +3552,7 @@ function _wpRenderCandidates(result, container, modalOverlay) {
     + '<th style="padding:5px 6px; min-width:160px;">住所</th>'
     + '<th style="padding:5px 6px; width:88px;">住所開始</th>'
     + '<th style="padding:5px 6px; width:88px;">住所終了</th>'
+    + '<th style="padding:5px 6px; width:110px;" title="抽出された日付の解釈を変更">日付種別</th>'
     + '<th style="padding:5px 6px; min-width:120px;">備考（原因等）</th>'
     + '</tr>';
   table.appendChild(thead);
@@ -3126,6 +3599,38 @@ function _wpRenderCandidates(result, container, modalOverlay) {
     }
     tr.appendChild(tdDup);
 
+    // ★ 動作セレクト（重複検出のある行に対する登録時アクション） ★
+    // ・新規追加: 通常の人物追加
+    // ・既存人物を更新: 重複先の既存人物に対し、空欄フィールドを補完
+    // ・スキップ: 登録しない（チェック解除と等価だが意図を明示）
+    const tdAct = document.createElement('td');
+    tdAct.style.cssText = 'padding:3px;';
+    const actSel = document.createElement('select');
+    actSel.className = 'wp-cand-action';
+    actSel.dataset.dupType = dup ? dup.type : '';
+    actSel.dataset.dupTarget = dup ? dup.target : '';
+    actSel.style.cssText = 'width:100%; padding:2px 3px; font-size:10.5px; border:1px solid #b6bfca; border-radius:2px;';
+    const actOpts = [
+      { v: 'new',  l: '新規追加' },
+      { v: 'update', l: '既存人物を更新' },
+      { v: 'skip', l: 'スキップ' }
+    ];
+    actOpts.forEach(o => {
+      const opt = document.createElement('option');
+      opt.value = o.v; opt.textContent = o.l;
+      actSel.appendChild(opt);
+    });
+    // 既定: 完全重複 → スキップ（安全優先）、類似 → 新規追加（ユーザー判断）、非重複 → 新規追加
+    if (dup && dup.severity === 'exact') actSel.value = 'skip';
+    else actSel.value = 'new';
+    // 重複検出が無い行では「既存更新」は無効化（target が無いため）
+    if (!dup) {
+      const updOpt = Array.from(actSel.options).find(o => o.value === 'update');
+      if (updOpt) updOpt.disabled = true;
+    }
+    tdAct.appendChild(actSel);
+    tr.appendChild(tdAct);
+
     // 住所履歴候補表示
     const tdHist = document.createElement('td');
     tdHist.style.cssText = 'padding:4px; text-align:center; font-size:10.5px;';
@@ -3163,6 +3668,12 @@ function _wpRenderCandidates(result, container, modalOverlay) {
       inp.value = cand[field] || '';
       inp.placeholder = placeholder || '';
       inp.style.cssText = 'width:100%; padding:3px 5px; font-size:11px; border:1px solid #b6bfca; border-radius:2px; box-sizing:border-box;';
+      // ★ 割当理由のツールチップ ★（lineTokens モードで _reasons が付与されている場合）
+      const reasons = cand._reasons || {};
+      if (reasons[field]) {
+        inp.title = '割当理由: ' + reasons[field];
+        inp.style.borderColor = '#1e7e34';   // 理由付きは緑枠で視覚的に区別
+      }
       td.appendChild(inp);
       return td;
     };
@@ -3178,6 +3689,11 @@ function _wpRenderCandidates(result, container, modalOverlay) {
         sel.appendChild(o);
       });
       sel.value = current || '';
+      const reasons = cand._reasons || {};
+      if (reasons[field]) {
+        sel.title = '割当理由: ' + reasons[field];
+        sel.style.borderColor = '#1e7e34';
+      }
       td.appendChild(sel);
       return td;
     };
@@ -3195,17 +3711,81 @@ function _wpRenderCandidates(result, container, modalOverlay) {
     tr.appendChild(mkInput('addressStart', '住所開始日'));
     tr.appendChild(mkInput('addressEnd', '住所終了日'));
 
-    // 備考: 番号・原因・原因日付・世帯情報・異動情報・共通住所フラグを集約
-    const noteParts = [];
-    if (cand.number) noteParts.push('番号:' + cand.number);
-    if (cand.cause) {
-      const causePart = cand.causeDate ? (cand.cause + '(' + cand.causeDate + ')') : cand.cause;
-      noteParts.push('原因:' + causePart);
-    } else if (cand.causeDate) {
-      noteParts.push('日付候補:' + cand.causeDate);
+    // ★ 日付種別セレクト ★
+    // 抽出された日付（最優先1個）の解釈を変更できる。
+    // 変更すると、対応する入力欄（birth/death/addressStart/addressEnd）に値が移動する。
+    // 「日付候補」は確定せず、備考欄に「原因日付:〇〇」として残す。
+    const tdDtSel = document.createElement('td');
+    tdDtSel.style.cssText = 'padding:3px;';
+    const dtSel = document.createElement('select');
+    dtSel.className = 'wp-cand-datetype';
+    dtSel.style.cssText = 'width:100%; padding:2px 3px; font-size:10.5px; border:1px solid #b6bfca; border-radius:2px;';
+    [
+      { v: 'birth', l: '生年月日' },
+      { v: 'death', l: '死亡日' },
+      { v: 'addressStart', l: '住所開始日' },
+      { v: 'addressEnd', l: '住所終了日' },
+      { v: 'causeDate', l: '日付候補（未確定）' },
+      { v: 'none', l: '(日付なし)' }
+    ].forEach(o => {
+      const opt = document.createElement('option');
+      opt.value = o.v; opt.textContent = o.l;
+      dtSel.appendChild(opt);
+    });
+    // 現在の主要日付フィールドを判定して初期値設定
+    const dateFieldOrder = ['death', 'addressEnd', 'addressStart', 'birth', 'causeDate'];
+    let primaryDateField = 'none';
+    let primaryDateValue = '';
+    for (const f of dateFieldOrder) {
+      if (cand[f]) { primaryDateField = f; primaryDateValue = cand[f]; break; }
     }
-    if (cand.householdInfo) noteParts.push('世帯:' + cand.householdInfo);
-    if (cand.transferInfo && cand.transferInfo !== cand.cause) noteParts.push('異動:' + cand.transferInfo);
+    dtSel.value = primaryDateField;
+    dtSel.dataset.lastField = primaryDateField;
+    dtSel.dataset.value = primaryDateValue;
+    // 変更時: 主要日付を新フィールドへ移動
+    dtSel.addEventListener('change', () => {
+      const oldField = dtSel.dataset.lastField;
+      const newField = dtSel.value;
+      const val = dtSel.dataset.value || '';
+      // 旧フィールドをクリア（causeDate は備考側で管理）
+      if (oldField !== 'causeDate' && oldField !== 'none') {
+        const oldInp = tr.querySelector('input[data-field="' + oldField + '"]');
+        if (oldInp && oldInp.value === val) oldInp.value = '';
+      }
+      // 新フィールドへ設定
+      if (newField !== 'causeDate' && newField !== 'none') {
+        const newInp = tr.querySelector('input[data-field="' + newField + '"]');
+        if (newInp) newInp.value = val;
+      }
+      // 備考欄の causeDate 表記を更新
+      const noteInp2 = tr.querySelector('input[data-field="note"]');
+      if (noteInp2) {
+        if (newField === 'causeDate' && val) {
+          // 既存の「日付候補:」を更新 OR 追加
+          if (!/日付候補[:：]/.test(noteInp2.value)) {
+            noteInp2.value = (noteInp2.value ? noteInp2.value + ' / ' : '') + '日付候補：' + val;
+          }
+        } else {
+          // 「日付候補」表記を除去
+          noteInp2.value = noteInp2.value.replace(/\s*\/?\s*日付候補[:：][^\/]*/, '').replace(/^\s*\/\s*/, '').trim();
+        }
+      }
+      dtSel.dataset.lastField = newField;
+    });
+    tdDtSel.appendChild(dtSel);
+    tr.appendChild(tdDtSel);
+
+    // ★ 備考: 番号/原因/原因日付/住所開始日/住所終了日/世帯/異動/カナ氏名/共通住所フラグ を構造化集約 ★
+    // 全角コロンで仕様に合わせる: 「番号：12345」「原因：死亡」など
+    const noteParts = [];
+    if (cand.number) noteParts.push('番号：' + cand.number);
+    if (cand.cause) noteParts.push('原因：' + cand.cause);
+    if (cand.causeDate) noteParts.push('原因日付：' + cand.causeDate);
+    if (cand.addressStart) noteParts.push('住所開始日：' + cand.addressStart);
+    if (cand.addressEnd) noteParts.push('住所終了日：' + cand.addressEnd);
+    if (cand.householdInfo) noteParts.push('世帯：' + cand.householdInfo);
+    if (cand.transferInfo && cand.transferInfo !== cand.cause) noteParts.push('異動：' + cand.transferInfo);
+    if (cand.kana) noteParts.push('カナ氏名：' + cand.kana);
     if (cand.addressFromCommon) noteParts.push('住所=共通');
     if (cand.note) noteParts.push(cand.note);
     const noteCell = mkInput('note', '備考');
@@ -3227,7 +3807,30 @@ function _wpRenderCandidates(result, container, modalOverlay) {
     });
   }
 
-  // 住所履歴反映チェック + 登録ボタン
+  // ★ 手動候補追加ボタン ★（解析が失敗した場合や、追加で手入力したい場合）
+  const manualRow = document.createElement('div');
+  manualRow.style.cssText = 'display:flex; gap:8px; padding:4px 0 8px; align-items:center;';
+  const manualBtn = document.createElement('button');
+  manualBtn.type = 'button';
+  manualBtn.className = 'btn btn-small';
+  manualBtn.style.cssText = 'font-size:11.5px; padding:4px 10px;';
+  manualBtn.textContent = '➕ 手動で候補を追加';
+  manualBtn.addEventListener('click', () => {
+    _wpAppendBlankCandidateRow(table);
+  });
+  manualRow.appendChild(manualBtn);
+  const manualHint = document.createElement('span');
+  manualHint.style.cssText = 'font-size:11px; color:#5a6873;';
+  manualHint.textContent = '※ 解析が失敗した行や、追加で手入力したい候補に。';
+  manualRow.appendChild(manualHint);
+  container.appendChild(manualRow);
+
+  // ★ 抽出トークン一覧（lineTokens モードや、参考表示として） ★
+  if (result.tokens && result.tokens.length > 0) {
+    _wpRenderTokenList(container, result.tokens);
+  }
+
+  // 住所履歴反映チェック + 住所種別 + 登録ボタン
   const regRow = document.createElement('div');
   regRow.style.cssText = 'display:flex; gap:8px; padding:8px 0; align-items:center; flex-wrap:wrap;';
   const histChkLabel = document.createElement('label');
@@ -3236,6 +3839,30 @@ function _wpRenderCandidates(result, container, modalOverlay) {
     + '住所履歴にも反映する <span style="color:#5a6873; font-size:10.5px;">'
     + '（住所＋住所開始日候補が揃った ' + histCandCount + ' 件のみ対象）</span>';
   regRow.appendChild(histChkLabel);
+  // ★ 住所種別の初期値選択 ★ 職場システム由来の住所は通常「住民票」が自然。
+  const addrTypeLabel = document.createElement('label');
+  addrTypeLabel.style.cssText = 'font-size:11.5px; color:#1f3a5a; margin-left:4px;';
+  addrTypeLabel.textContent = '住所種別 ';
+  const addrTypeSel = document.createElement('select');
+  addrTypeSel.id = 'wpAddrType';
+  addrTypeSel.style.cssText = 'padding:3px 6px; font-size:11px; border:1px solid #b6bfca; border-radius:3px;';
+  [
+    { v: '住民票', l: '住民票（既定）' },
+    { v: '不明', l: '不明' },
+    { v: '実態', l: '実態' },
+    { v: '本籍', l: '本籍' },
+    { v: '施設', l: '施設' },
+    { v: '病院', l: '病院' },
+    { v: '', l: '(未指定)' }
+  ].forEach(o => {
+    const opt = document.createElement('option');
+    opt.value = o.v; opt.textContent = o.l;
+    addrTypeSel.appendChild(opt);
+  });
+  addrTypeSel.value = '住民票';
+  if (histCandCount === 0) addrTypeSel.disabled = true;
+  addrTypeLabel.appendChild(addrTypeSel);
+  regRow.appendChild(addrTypeLabel);
   const regBtn = document.createElement('button');
   regBtn.className = 'btn btn-success';
   regBtn.type = 'button';
@@ -3247,18 +3874,248 @@ function _wpRenderCandidates(result, container, modalOverlay) {
   regRow.appendChild(regBtn);
   const regHint = document.createElement('span');
   regHint.style.cssText = 'font-size:11px; color:#5a6873;';
-  regHint.textContent = '※ 氏名が空欄の候補はスキップされます。';
+  regHint.textContent = '※ 氏名が空欄の候補はスキップされます。重複検出行は「動作」列で振分け。';
   regRow.appendChild(regHint);
   container.appendChild(regRow);
 }
 
 /* チェックされた候補を人物情報へ反映 */
+/* 抽出トークン一覧の表示（参考情報・割当理由のデバッグ用）。
+   解析失敗時にも貼付テキストの分類が見える化される。 */
+function _wpRenderTokenList(container, tokens) {
+  const wrap = document.createElement('details');
+  wrap.style.cssText = 'margin: 6px 0; padding: 6px 10px; background:#f6f7f9; border:1px solid #d0d7de; border-radius:3px; font-size:11px;';
+  const sum = document.createElement('summary');
+  sum.style.cssText = 'cursor:pointer; font-weight:bold; color:#1f3a5a;';
+  sum.textContent = '抽出トークン一覧（' + tokens.length + ' 件）／割当理由のヒント';
+  wrap.appendChild(sum);
+  const body = document.createElement('div');
+  body.style.cssText = 'padding: 6px 0; max-height: 200px; overflow-y: auto;';
+  // テーブル形式で kind と value を表示
+  const tbl = document.createElement('table');
+  tbl.style.cssText = 'width:100%; border-collapse:collapse; font-size:10.5px; font-family:monospace;';
+  tbl.innerHTML = '<thead><tr style="background:#e7ecf0;">'
+    + '<th style="padding:2px 6px; text-align:left;">行</th>'
+    + '<th style="padding:2px 6px; text-align:left;">位置</th>'
+    + '<th style="padding:2px 6px; text-align:left;">種別</th>'
+    + '<th style="padding:2px 6px; text-align:left;">値</th>'
+    + '<th style="padding:2px 6px; text-align:left;">正規化</th>'
+    + '</tr></thead>';
+  const tbody = document.createElement('tbody');
+  const kindColors = {
+    date: '#1e7e34', gender: '#6c3483', cause: '#b03a2e', relation: '#1f3a5a',
+    household: '#0e6655', number: '#5a6873', kana: '#8e44ad',
+    'address-part': '#d35400', 'name-cjk': '#1e7e34', 'cjk-other': '#7d8a92',
+    unknown: '#999', empty: '#ccc'
+  };
+  tokens.forEach(t => {
+    const tr = document.createElement('tr');
+    tr.style.cssText = 'border-bottom:1px solid #ebeef1;';
+    const color = kindColors[t.kind] || '#5a6873';
+    tr.innerHTML = '<td style="padding:1px 6px; color:#5a6873;">L' + (t.lineNo || '?') + '</td>'
+      + '<td style="padding:1px 6px; color:#5a6873;">' + (t.position != null ? t.position : '?') + '</td>'
+      + '<td style="padding:1px 6px; color:' + color + '; font-weight:bold;">' + _escapeHtml(t.kind || '?') + '</td>'
+      + '<td style="padding:1px 6px;">' + _escapeHtml(t.value || '(空)') + '</td>'
+      + '<td style="padding:1px 6px; color:#5a6873;">' + _escapeHtml(t.normalized && t.normalized !== t.value ? t.normalized : '') + '</td>';
+    tbody.appendChild(tr);
+  });
+  tbl.appendChild(tbody);
+  body.appendChild(tbl);
+  wrap.appendChild(body);
+  container.appendChild(wrap);
+}
+
+/* 候補テーブルに空の手動候補行を追加。 */
+function _wpAppendBlankCandidateRow(table) {
+  if (!table) return;
+  const tbody = table.querySelector('tbody');
+  if (!tbody) return;
+  const idx = tbody.querySelectorAll('tr').length;
+  const tr = document.createElement('tr');
+  tr.style.cssText = 'border-bottom:1px solid #e0e4e8; background:#fffde7;';   // 手動行は薄黄で識別
+  tr.dataset.candidateIndex = idx;
+  tr.dataset.manual = '1';
+
+  // 登録チェック
+  const tdChk = document.createElement('td');
+  tdChk.style.cssText = 'padding:4px; text-align:center;';
+  const chk = document.createElement('input');
+  chk.type = 'checkbox'; chk.className = 'wp-cand-check'; chk.checked = true;
+  tdChk.appendChild(chk);
+  tr.appendChild(tdChk);
+  // 信頼度
+  const tdConf = document.createElement('td');
+  tdConf.style.cssText = 'padding:4px; text-align:center; font-size:10.5px; font-weight:bold; color:#5a6873;';
+  tdConf.textContent = '手動';
+  tr.appendChild(tdConf);
+  // 重複
+  const tdDup = document.createElement('td');
+  tdDup.style.cssText = 'padding:4px; text-align:center; font-size:10px; color:#bbb;';
+  tdDup.textContent = '—';
+  tr.appendChild(tdDup);
+  // 動作セレクト
+  const tdAct = document.createElement('td');
+  tdAct.style.cssText = 'padding:3px;';
+  const actSel = document.createElement('select');
+  actSel.className = 'wp-cand-action';
+  actSel.style.cssText = 'width:100%; padding:2px 3px; font-size:10.5px; border:1px solid #b6bfca; border-radius:2px;';
+  ['new', 'update', 'skip'].forEach(v => {
+    const o = document.createElement('option'); o.value = v;
+    o.textContent = (v === 'new') ? '新規追加' : (v === 'update') ? '既存人物を更新' : 'スキップ';
+    actSel.appendChild(o);
+  });
+  actSel.value = 'new';
+  const updOpt = Array.from(actSel.options).find(o => o.value === 'update');
+  if (updOpt) updOpt.disabled = true;
+  tdAct.appendChild(actSel);
+  tr.appendChild(tdAct);
+  // 住所履歴
+  const tdHist = document.createElement('td');
+  tdHist.style.cssText = 'padding:4px; text-align:center; font-size:10.5px; color:#bbb;';
+  tdHist.textContent = '—';
+  tr.appendChild(tdHist);
+  // 元行
+  const tdLine = document.createElement('td');
+  tdLine.style.cssText = 'padding:4px; text-align:center; font-size:10px; color:#5a6873;';
+  tdLine.textContent = '手動';
+  tr.appendChild(tdLine);
+  // 入力欄ジェネレータ
+  const mkBlankInput = (field, placeholder) => {
+    const td = document.createElement('td');
+    td.style.cssText = 'padding:3px;';
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.dataset.field = field;
+    inp.placeholder = placeholder || '';
+    inp.style.cssText = 'width:100%; padding:3px 5px; font-size:11px; border:1px solid #b6bfca; border-radius:2px; box-sizing:border-box;';
+    td.appendChild(inp);
+    return td;
+  };
+  const mkBlankSelect = (field, options) => {
+    const td = document.createElement('td');
+    td.style.cssText = 'padding:3px;';
+    const sel = document.createElement('select');
+    sel.dataset.field = field;
+    sel.style.cssText = 'width:100%; padding:2px 3px; font-size:11px; border:1px solid #b6bfca; border-radius:2px;';
+    options.forEach(opt => {
+      const o = document.createElement('option');
+      o.value = opt; o.textContent = opt || '(未設定)';
+      sel.appendChild(o);
+    });
+    td.appendChild(sel);
+    return td;
+  };
+  tr.appendChild(mkBlankInput('name', '氏名（必須）'));
+  tr.appendChild(mkBlankSelect('relation',
+    ['', '被相続人', '妻', '夫', '配偶者', '長男', '二男', '三男', '長女', '二女', '三女',
+     '父', '母', '兄', '弟', '姉', '妹', '養子', '養女', '甥', '姪', '孫', '祖父', '祖母', 'その他']));
+  tr.appendChild(mkBlankInput('kana', 'カナ'));
+  tr.appendChild(mkBlankSelect('gender', ['', '男', '女', '不明']));
+  tr.appendChild(mkBlankInput('birth', 'S45.6.6 等'));
+  tr.appendChild(mkBlankInput('death', '任意'));
+  tr.appendChild(mkBlankInput('address', '住所'));
+  tr.appendChild(mkBlankInput('addressStart', '住所開始日'));
+  tr.appendChild(mkBlankInput('addressEnd', '住所終了日'));
+  // 日付種別セレクト（手動行は初期 (日付なし)）
+  const tdDtSel = document.createElement('td');
+  tdDtSel.style.cssText = 'padding:3px;';
+  const dtSel = document.createElement('select');
+  dtSel.className = 'wp-cand-datetype';
+  dtSel.style.cssText = 'width:100%; padding:2px 3px; font-size:10.5px; border:1px solid #b6bfca; border-radius:2px;';
+  [
+    { v: 'birth', l: '生年月日' }, { v: 'death', l: '死亡日' },
+    { v: 'addressStart', l: '住所開始日' }, { v: 'addressEnd', l: '住所終了日' },
+    { v: 'causeDate', l: '日付候補（未確定）' }, { v: 'none', l: '(日付なし)' }
+  ].forEach(o => {
+    const opt = document.createElement('option');
+    opt.value = o.v; opt.textContent = o.l;
+    dtSel.appendChild(opt);
+  });
+  dtSel.value = 'none';
+  dtSel.dataset.lastField = 'none';
+  dtSel.dataset.value = '';
+  tdDtSel.appendChild(dtSel);
+  tr.appendChild(tdDtSel);
+  tr.appendChild(mkBlankInput('note', '備考'));
+  tbody.appendChild(tr);
+  // 氏名入力にフォーカス
+  const nameInp = tr.querySelector('input[data-field="name"]');
+  if (nameInp) nameInp.focus();
+}
+
+/* 解析0件時の手動入力専用ブロック（テーブル + 登録ボタン） */
+function _wpRenderManualOnlyBlock(modalOverlay) {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'margin-top: 10px;';
+  const title = document.createElement('div');
+  title.style.cssText = 'font-size:12px; font-weight:bold; color:#1f3a5a; margin-bottom:4px;';
+  title.textContent = '手動入力で候補を作成';
+  wrap.appendChild(title);
+  // 簡易テーブル（手動行を入れるための土台）
+  const table = document.createElement('table');
+  table.className = 'wp-candidates-table';
+  table.style.cssText = 'width:100%; border-collapse:collapse; font-size:11.5px; min-width:1350px;';
+  const thead = document.createElement('thead');
+  thead.innerHTML = '<tr style="background:#2b3a4a; color:#fff;">'
+    + '<th style="padding:5px 6px; width:46px;">登録</th>'
+    + '<th style="padding:5px 6px; width:54px;">信頼度</th>'
+    + '<th style="padding:5px 6px; width:54px;">重複</th>'
+    + '<th style="padding:5px 6px; width:100px;">動作</th>'
+    + '<th style="padding:5px 6px; width:42px;">住所履歴</th>'
+    + '<th style="padding:5px 6px; width:52px;">元行</th>'
+    + '<th style="padding:5px 6px; min-width:110px;">氏名 *</th>'
+    + '<th style="padding:5px 6px; width:90px;">続柄</th>'
+    + '<th style="padding:5px 6px; min-width:90px;">カナ氏名</th>'
+    + '<th style="padding:5px 6px; width:60px;">性別</th>'
+    + '<th style="padding:5px 6px; width:88px;">生年月日</th>'
+    + '<th style="padding:5px 6px; width:88px;">死亡日</th>'
+    + '<th style="padding:5px 6px; min-width:160px;">住所</th>'
+    + '<th style="padding:5px 6px; width:88px;">住所開始</th>'
+    + '<th style="padding:5px 6px; width:88px;">住所終了</th>'
+    + '<th style="padding:5px 6px; width:110px;">日付種別</th>'
+    + '<th style="padding:5px 6px; min-width:120px;">備考</th>'
+    + '</tr>';
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  table.appendChild(tbody);
+  const tableWrap = document.createElement('div');
+  tableWrap.style.cssText = 'overflow-x:auto; margin-bottom:6px;';
+  tableWrap.appendChild(table);
+  wrap.appendChild(tableWrap);
+  // 手動追加 + 登録
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex; gap:8px; padding:8px 0; align-items:center; flex-wrap:wrap;';
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button'; addBtn.className = 'btn btn-small';
+  addBtn.textContent = '➕ 手動で候補を追加';
+  addBtn.addEventListener('click', () => _wpAppendBlankCandidateRow(table));
+  btnRow.appendChild(addBtn);
+  const regBtn = document.createElement('button');
+  regBtn.type = 'button';
+  regBtn.className = 'btn btn-success';
+  regBtn.style.cssText = 'font-weight:bold;';
+  regBtn.textContent = '✅ 手動入力した候補を登録';
+  regBtn.addEventListener('click', () => _wpRegisterChecked(table, modalOverlay));
+  btnRow.appendChild(regBtn);
+  const hint = document.createElement('span');
+  hint.style.cssText = 'font-size:11px; color:#5a6873;';
+  hint.textContent = '※ 手動入力時は住所履歴反映と住所種別は使えません。住所タブで別途追加してください。';
+  btnRow.appendChild(hint);
+  wrap.appendChild(btnRow);
+  // 初期に1行追加（ユーザーがすぐ入力開始できるように）
+  _wpAppendBlankCandidateRow(table);
+  return wrap;
+}
+
 function _wpRegisterChecked(table, modalOverlay) {
-  let registered = 0, skipped = 0, addrAdded = 0;
-  const addedNames = [];
+  let registered = 0, updated = 0, skipped = 0, addrAdded = 0;
+  const addedNames = [], updatedNames = [], skippedNames = [];
   // 住所履歴にも反映するか（マスタチェック）
   const histFlagEl = document.getElementById('wpAddrHistFlag');
   const reflectHist = !!(histFlagEl && histFlagEl.checked);
+  // 住所種別の初期値
+  const addrTypeEl = document.getElementById('wpAddrType');
+  const addressType = addrTypeEl ? (addrTypeEl.value || '住民票') : '住民票';
 
   Array.from(table.querySelectorAll('tbody tr')).forEach(tr => {
     const chk = tr.querySelector('.wp-cand-check');
@@ -3269,20 +4126,73 @@ function _wpRegisterChecked(table, modalOverlay) {
     };
     const name = get('name');
     if (!name) { skipped++; return; }
-    const id = (typeof _wizardNextId === 'function') ? _wizardNextId()
-             : ('P' + String(state.persons.length + 1).padStart(2, '0'));
+
+    // 重複動作セレクトを読む
+    const actSel = tr.querySelector('.wp-cand-action');
+    const action = actSel ? actSel.value : 'new';
+    const dupTarget = actSel ? (actSel.dataset.dupTarget || '') : '';
+    const dupType = actSel ? (actSel.dataset.dupType || '') : '';
+
     const death = get('death');
     const address = get('address');
     const addressStart = get('addressStart');
     const addressEnd = get('addressEnd');
     const note = get('note');
+    const birth = get('birth');
+    const gender = get('gender');
+    const relation = get('relation');
+
+    // ===== スキップ =====
+    if (action === 'skip') {
+      skipped++; skippedNames.push(name); return;
+    }
+
+    // ===== 既存人物を更新 =====
+    if (action === 'update' && dupTarget && dupType === 'existing') {
+      // 既存人物を検索（dupTarget は氏名 or ID）
+      let target = state.persons.find(p => p.name === dupTarget);
+      if (!target) target = state.persons.find(p => p.id === dupTarget);
+      if (target) {
+        // 空欄フィールドを補完。既存値は上書きしない（安全優先）
+        if (!target.birth && birth) target.birth = birth;
+        if (!target.death && death) target.death = death;
+        if (!target.gender && gender) target.gender = gender;
+        if (!target.relation && relation) target.relation = relation;
+        if (!target.currentAddress && address) target.currentAddress = address;
+        // 備考は追記（既存値の有無に関わらず「[貼付取込]」タグで追跡可能にする）
+        const noteToAppend = note ? ('[貼付取込] ' + note) : '[貼付取込] (フィールド補完のみ)';
+        target.note = (target.note ? target.note + '\n' : '') + noteToAppend;
+        // blockReason: 既存が「なし」かつ death を補完した場合「死亡」へ
+        if (death && (!target.blockReason || target.blockReason === 'なし')) {
+          target.blockReason = '死亡';
+        }
+        _wizardRefreshTableRows && _wizardRefreshTableRows();
+        updated++;
+        updatedNames.push(name);
+
+        // 住所履歴も反映（既存IDに紐付け）
+        if (reflectHist && address && addressStart && typeof addAddressRow === 'function') {
+          addAddressRow({
+            personId: target.id, address, start: addressStart, end: addressEnd || '',
+            addressType, note: ''
+          });
+          addrAdded++;
+        }
+        return;
+      }
+      // 更新先が見つからない → 新規追加にフォールバック
+    }
+
+    // ===== 新規追加 =====
+    const id = (typeof _wizardNextId === 'function') ? _wizardNextId()
+             : ('P' + String(state.persons.length + 1).padStart(2, '0'));
     const personData = {
-      id, name, relation: get('relation') || '',
-      gender: get('gender') || '',
-      birth: get('birth'),
+      id, name, relation: relation || '',
+      gender: gender || '',
+      birth,
       death,
       currentAddress: address,
-      note,
+      note,                       // 構造化済み備考（番号/原因/原因日付/住所開始/終了/カナ氏名 含む）
       heirCategory: '',
       displayOrder: (typeof _wizardNextOrder === 'function') ? _wizardNextOrder() : '',
       blockReason: death ? '死亡' : 'なし'
@@ -3291,36 +4201,31 @@ function _wpRegisterChecked(table, modalOverlay) {
     registered++;
     addedNames.push(name);
 
-    // 住所履歴にも反映（マスタチェックON + 住所+住所開始日候補が揃っている場合のみ）
-    if (reflectHist && address && addressStart) {
-      // 備考の「原因」記述を住所履歴 note に保存
-      let addrNote = '';
-      const causeMatch = note.match(/原因:([^\/]+)/);
-      if (causeMatch) addrNote = '原因: ' + causeMatch[1].trim();
-      if (typeof addAddressRow === 'function') {
-        addAddressRow({
-          personId: id,
-          address: address,
-          start: addressStart,
-          end: addressEnd || '',
-          addressType: '',
-          note: addrNote
-        });
-        addrAdded++;
-      }
+    // 住所履歴にも反映
+    if (reflectHist && address && addressStart && typeof addAddressRow === 'function') {
+      addAddressRow({
+        personId: id, address, start: addressStart, end: addressEnd || '',
+        addressType, note: ''
+      });
+      addrAdded++;
     }
   });
   if (typeof syncPersonsFromTable === 'function') syncPersonsFromTable();
   if (typeof syncAddressesFromTable === 'function' && addrAdded > 0) syncAddressesFromTable();
   if (modalOverlay) modalOverlay.remove();
+  const messageParts = [];
+  messageParts.push('新規追加: ' + registered + ' 名');
+  if (updated > 0) messageParts.push('既存人物 更新: ' + updated + ' 名');
+  if (skipped > 0) messageParts.push('スキップ: ' + skipped + ' 件');
+  if (addrAdded > 0) messageParts.push('住所履歴: ' + addrAdded + ' 件追加（種別=' + addressType + '）');
   showModalNotice({
     title: '職場システム貼付取込 完了',
-    message: registered + ' 名を人物情報へ登録しました。'
-      + (skipped > 0 ? '\n氏名空欄のためスキップ: ' + skipped + ' 件。' : '')
-      + (addrAdded > 0 ? '\n住所履歴にも ' + addrAdded + ' 件追加しました。' : '')
-      + (addedNames.length > 0 ? '\n\n追加された人物: ' + addedNames.slice(0, 5).join('、')
+    message: messageParts.join(' ／ ')
+      + (addedNames.length > 0 ? '\n\n追加: ' + addedNames.slice(0, 5).join('、')
           + (addedNames.length > 5 ? ' ほか ' + (addedNames.length - 5) + ' 名' : '') : '')
-      + '\n\n※ 人物情報タブで続柄・親子関係・配偶者IDを設定してください。',
+      + (updatedNames.length > 0 ? '\n更新: ' + updatedNames.join('、') : '')
+      + (skippedNames.length > 0 ? '\nスキップ: ' + skippedNames.join('、') : '')
+      + '\n\n※ 続柄・親子関係・配偶者ID は人物情報タブで設定してください。',
     severity: 'info'
   });
 }
