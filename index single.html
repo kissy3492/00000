@@ -2151,6 +2151,8 @@ function buildReplyFields(w,h,vertical){
    - v38-40でIIFE + strict + 明示export化
    ============================================================ */
 const MIN_FONT_PT = 8;
+// v41-1: 推奨下限8ptで収まらない場合も、絶対下限5ptまで縮小して印字範囲内に確実に収める。
+const ABS_MIN_FONT_PT = 5;
 
 /* ============================================================
    自動調整
@@ -2219,11 +2221,13 @@ function wrapTextByPrintUnits(line, maxPrintUnits, vertical){
   return out;
 }
 function fitText(text,fld,rect){
-  if(!text) return {text:'',fontSize:fld.fontSize,fit:true};
+  if(!text) return {text:'',fontSize:fld.fontSize,fit:true,small:false};
   const vertical=fld.vertical;let size=fld.fontSize;
   const lineHeight=Math.max(0.8, Math.min(2.5, Number(fld.lineHeight || 1.2)));
   const logical=String(text).split('\n');
-  while(size>=MIN_FONT_PT){
+  // v41-1: 推奨下限(8pt)で収まらない場合も絶対下限(5pt)まで縮小を続け、印字範囲内に確実に収める。
+  // 8pt未満で収まった場合は small:true を返し、描画側で「縮小注意」を表示する。
+  while(size>=ABS_MIN_FONT_PT){
     const cm=approxChar(size);const lh=cm*lineHeight;
     const cpl=vertical?Math.max(1,Math.floor(rect.h/cm)):Math.max(1,Math.floor(rect.w/cm));
     const maxL=vertical?Math.max(1,Math.floor(rect.w/lh)):Math.max(1,Math.floor(rect.h/lh));
@@ -2232,17 +2236,17 @@ function fitText(text,fld,rect){
       if(!ll){wrapped.push('');continue}
       wrapped.push(...wrapTextByPrintUnits(ll,cpl,vertical));
     }
-    if(wrapped.length<=maxL) return {text:wrapped.join('\n'),fontSize:size,fit:true};
+    if(wrapped.length<=maxL) return {text:wrapped.join('\n'),fontSize:size,fit:true,small:size<MIN_FONT_PT};
     size-=0.5;
   }
-  const cm=approxChar(MIN_FONT_PT);
+  const cm=approxChar(ABS_MIN_FONT_PT);
   const cpl=vertical?Math.max(1,Math.floor(rect.h/cm)):Math.max(1,Math.floor(rect.w/cm));
   const wrapped=[];
   for(const ll of logical){
     if(!ll){wrapped.push('');continue}
     wrapped.push(...wrapTextByPrintUnits(ll,cpl,vertical));
   }
-  return {text:wrapped.join('\n'),fontSize:MIN_FONT_PT,fit:false};
+  return {text:wrapped.join('\n'),fontSize:ABS_MIN_FONT_PT,fit:false,small:true};
 }
 
 
@@ -2752,39 +2756,62 @@ function fitText(text,fld,rect){
   }
 
   function attachFieldDrag(el,fld){
-    const corner = el.querySelector('.field-resize-corner');
-    if(corner){
-      function startResize(e){
-        if(!isPrimaryDragStart(e)||addingZoneMode) return;
-        e.stopPropagation();preventDragDefault(e);
-        const t = getCurrentTpl();
-        if(t && t.locked){toast('ロックされています。先にロック解除してください','warn');return;}
-        recordLayoutHistory('field-resize');
-        const mmPx=getMMperPx();const p=getDragPoint(e);const sx=p.clientX,sy=p.clientY;
-        const sw=fld.w,sh=fld.h;
-        state.selectedFieldId=fld.id;state.selectedZoneId=null;
-        function onMove(ev){
-          preventDragDefault(ev);
-          const mp=getDragPoint(ev);
-          const maxW = (t && +t.w>0) ? Math.max(3, (+t.w) - (+fld.x||0)) : Infinity;
-          const maxH = (t && +t.h>0) ? Math.max(3, (+t.h) - (+fld.y||0)) : Infinity;
-          fld.w=Math.max(3,Math.min(maxW,Math.round((sw+(mp.clientX-sx)*mmPx)*10)/10));
-          fld.h=Math.max(3,Math.min(maxH,Math.round((sh+(mp.clientY-sy)*mmPx)*10)/10));
-          renderEnvelope();
+    // v41-2: 印字範囲の枠（四辺・四隅の8方向ハンドル）を直接つかんでサイズ調整できるようにする。
+    // 座標計算は従来どおり決定論的mmベース（0.1mm丸め・紙面内クランプ）。
+    const MIN_FIELD_MM = 3;
+    function startResizeDir(e, dir){
+      if(!isPrimaryDragStart(e)||addingZoneMode) return;
+      e.stopPropagation();preventDragDefault(e);
+      const t = getCurrentTpl();
+      if(t && t.locked){toast('ロックされています。先にロック解除してください','warn');return;}
+      recordLayoutHistory('field-resize');
+      const mmPx=getMMperPx();const p=getDragPoint(e);const sx=p.clientX,sy=p.clientY;
+      const startX=+fld.x||0, startY=+fld.y||0, startW=+fld.w||MIN_FIELD_MM, startH=+fld.h||MIN_FIELD_MM;
+      const right=startX+startW, bottom=startY+startH;
+      const tplW=(t && +t.w>0)?(+t.w):Infinity;
+      const tplH=(t && +t.h>0)?(+t.h):Infinity;
+      const d=String(dir||'se');
+      state.selectedFieldId=fld.id;state.selectedZoneId=null;
+      function r1(v){return Math.round(v*10)/10;}
+      function onMove(ev){
+        preventDragDefault(ev);
+        const mp=getDragPoint(ev);
+        const dx=(mp.clientX-sx)*mmPx, dy=(mp.clientY-sy)*mmPx;
+        if(d.includes('e')){
+          fld.w=r1(Math.max(MIN_FIELD_MM,Math.min(tplW-startX,startW+dx)));
         }
-        function onUp(){
-          removeDragDocumentListeners(onMove,onUp);
-          markLayoutChanged(t);
-          save();renderFieldList();
+        if(d.includes('s')){
+          fld.h=r1(Math.max(MIN_FIELD_MM,Math.min(tplH-startY,startH+dy)));
         }
-        addDragDocumentListeners(onMove,onUp);
+        if(d.includes('w')){
+          // 右辺を固定して左辺を動かす。
+          const nx=r1(Math.max(0,Math.min(right-MIN_FIELD_MM,startX+dx)));
+          fld.x=nx;fld.w=r1(right-nx);
+        }
+        if(d.includes('n')){
+          // 下辺を固定して上辺を動かす。
+          const ny=r1(Math.max(0,Math.min(bottom-MIN_FIELD_MM,startY+dy)));
+          fld.y=ny;fld.h=r1(bottom-ny);
+        }
+        renderEnvelope();
       }
-      corner.addEventListener('mousedown',startResize);
-      corner.addEventListener('touchstart',startResize,{passive:false});
+      function onUp(){
+        removeDragDocumentListeners(onMove,onUp);
+        markLayoutChanged(t);
+        save();renderFieldList();
+      }
+      addDragDocumentListeners(onMove,onUp);
     }
+    const handles = el.querySelectorAll('.field-resize-handle, .field-resize-corner');
+    handles.forEach(h=>{
+      const dir = (h.dataset && h.dataset.resizeDir) || 'se';
+      const start = e=>startResizeDir(e, dir);
+      h.addEventListener('mousedown',start);
+      h.addEventListener('touchstart',start,{passive:false});
+    });
     el.tabIndex = 0;
     el.setAttribute('role','button');
-    el.setAttribute('aria-label',`${fld.label || '印字項目'}。ドラッグで移動、右下ハンドルでサイズ変更、矢印キーで微調整できます。`);
+    el.setAttribute('aria-label',`${fld.label || '印字項目'}。ドラッグで移動、枠の辺・角ハンドルでサイズ変更、矢印キーで微調整できます。`);
     el.addEventListener('focus',()=>{
       state.selectedFieldId=fld.id;state.selectedZoneId=null;
       renderFieldList();
@@ -2794,7 +2821,9 @@ function fitText(text,fld,rect){
       nudgeSelectedLayoutItem(e);
     });
     function startDrag(e){
-      if(e.target===corner||!isPrimaryDragStart(e)||addingZoneMode) return;
+      if(!isPrimaryDragStart(e)||addingZoneMode) return;
+      // v41-2: 8方向リサイズハンドル上では移動ドラッグを開始しない。
+      if(e.target && e.target.closest && e.target.closest('.field-resize-handle, .field-resize-corner')) return;
       if(e.target && e.target.closest && e.target.closest('.field-toolbar')) return;
       const t = getCurrentTpl();
       if(t && t.locked){
@@ -3222,6 +3251,19 @@ function fitText(text,fld,rect){
    renderEnvelopeInto やドラッグ本体は 10_core.js 側に残す。
    ============================================================ */
 
+/* v41-2: 印字範囲の枠（四辺・四隅）を直接つかんでサイズ調整できるよう、
+   8方向のリサイズハンドルを生成する。'se' は従来の field-resize-corner を兼ねる。 */
+const FIELD_RESIZE_DIRS = ['nw','n','ne','e','se','s','sw','w'];
+function appendFieldResizeHandles(el){
+  FIELD_RESIZE_DIRS.forEach(dir=>{
+    const h=document.createElement('span');
+    h.className='field-resize-handle dir-'+dir+(dir==='se'?' field-resize-corner':'');
+    h.dataset.resizeDir=dir;
+    h.title='ドラッグでサイズ変更';
+    el.appendChild(h);
+  });
+}
+
 function renderNormalField(parent,f,sample,tpl,interactive,scale,highlightFieldId,showWarnings,ignoreAvoidZones){
   const baseRect={x:f.x,y:f.y,w:f.w,h:f.h};
   // v39-7: Step5比較プレビューでは避ける範囲による自動縮小を一時無視できるようにする。
@@ -3255,7 +3297,7 @@ function renderNormalField(parent,f,sample,tpl,interactive,scale,highlightFieldI
     }
     el.appendChild(c);
     if(interactive && !tpl.locked){
-      const corner=document.createElement('span');corner.className='field-resize-corner';corner.title='ドラッグでサイズ変更';el.appendChild(corner);
+      appendFieldResizeHandles(el); // v41-2: 8方向リサイズハンドル
       attachFieldDrag(el,f);if(typeof appendFieldToolbar==='function')appendFieldToolbar(el,f);
       el.addEventListener('click',e=>{
         e.stopPropagation();
@@ -3271,13 +3313,15 @@ function renderNormalField(parent,f,sample,tpl,interactive,scale,highlightFieldI
   }
   // v37 Step6-2: 描画対象テンプレートをpostProcessorへ渡す。
   const text=getFieldText(f,sample,{tpl});
-  const fit=f.autoFit?fitText(text,f,rect):{text,fontSize:f.fontSize,fit:true};
+  const fit=f.autoFit?fitText(text,f,rect):{text,fontSize:f.fontSize,fit:true,small:false};
   const warn = !fit.fit && (interactive || showWarnings);
   const avoidWarn = avoidAdjusted && showWarnings;
+  // v41-1: 8pt未満まで縮小して収めた場合の注意表示。
+  const smallWarn = !!fit.small && fit.fit && (interactive || showWarnings);
   const el=document.createElement('div');
   el.className='field'+(f.vertical?' vertical':'')
     +((f.id===state.selectedFieldId||f.id===highlightFieldId)&&interactive?' selected':'')
-    +((warn||avoidWarn)?' has-warning':'')
+    +((warn||avoidWarn||smallWarn)?' has-warning':'')
     +(f.showBorder?' show-border':'')
     +(tpl.locked?' locked':'');
   el.dataset.fid=f.id;
@@ -3286,11 +3330,11 @@ function renderNormalField(parent,f,sample,tpl,interactive,scale,highlightFieldI
   el.style.fontSize=(fit.fontSize*scale)+'pt';
   el.style.fontWeight=f.bold?'700':'400';
   el.style.fontFamily="'Hiragino Mincho ProN','Yu Mincho','MS Mincho',serif";
-  if(warn || avoidWarn){
+  if(warn || avoidWarn || smallWarn){
     const w=document.createElement('div');
     w.className='field-warning-icon';
-    w.textContent=warn?'!':'避';
-    w.title=warn?'文字が印字範囲に収まりません':'避ける範囲により印字範囲が縮小されています';
+    w.textContent=warn?'!':(avoidWarn?'避':'小');
+    w.title=warn?'文字が印字範囲に収まりません（5ptまで縮小しても収まりません。枠を広げてください）':(avoidWarn?'避ける範囲により印字範囲が縮小されています':'範囲に収めるため文字を8pt未満に縮小しています。枠を広げると読みやすくなります');
     el.appendChild(w);
   }
   const c=document.createElement('div');
@@ -3301,7 +3345,7 @@ function renderNormalField(parent,f,sample,tpl,interactive,scale,highlightFieldI
   if(f.vertical&&/[0-9a-zA-Z]/.test(c.textContent)) c.classList.add('with-numbers');
   el.appendChild(c);
   if(interactive && !tpl.locked){
-    const corner=document.createElement('span');corner.className='field-resize-corner';corner.title='ドラッグでサイズ変更';el.appendChild(corner);
+    appendFieldResizeHandles(el); // v41-2: 8方向リサイズハンドル
     attachFieldDrag(el,f);if(typeof appendFieldToolbar==='function')appendFieldToolbar(el,f);
     el.addEventListener('click',e=>{
       e.stopPropagation();
@@ -3335,7 +3379,7 @@ function renderZipField(parent,f,data,tpl,interactive,scale,highlightFieldId,onl
     c.textContent = shown;
     wrap.appendChild(c);
     if(interactive && !tpl.locked){
-      const corner=document.createElement('span');corner.className='field-resize-corner';corner.title='ドラッグでサイズ変更';wrap.appendChild(corner);
+      appendFieldResizeHandles(wrap); // v41-2: 8方向リサイズハンドル
       attachFieldDrag(wrap,f);if(typeof appendFieldToolbar==='function')appendFieldToolbar(wrap,f);
       wrap.addEventListener('click',e=>{
         e.stopPropagation();
@@ -3349,7 +3393,7 @@ function renderZipField(parent,f,data,tpl,interactive,scale,highlightFieldId,onl
   }
   if(!zip){
     if(interactive && !tpl.locked){
-      const corner=document.createElement('span');corner.className='field-resize-corner';corner.title='ドラッグでサイズ変更';wrap.appendChild(corner);
+      appendFieldResizeHandles(wrap); // v41-2: 8方向リサイズハンドル
       attachFieldDrag(wrap,f);if(typeof appendFieldToolbar==='function')appendFieldToolbar(wrap,f);
       wrap.addEventListener('click',e=>{
         e.stopPropagation();
@@ -3391,7 +3435,7 @@ function renderZipField(parent,f,data,tpl,interactive,scale,highlightFieldId,onl
     wrap.appendChild(grid);
   }
   if(interactive && !tpl.locked){
-    const corner=document.createElement('span');corner.className='field-resize-corner';corner.title='ドラッグでサイズ変更';wrap.appendChild(corner);
+    appendFieldResizeHandles(wrap); // v41-2: 8方向リサイズハンドル
     attachFieldDrag(wrap,f);if(typeof appendFieldToolbar==='function')appendFieldToolbar(wrap,f);
     wrap.addEventListener('click',e=>{
       e.stopPropagation();
@@ -3404,11 +3448,13 @@ function renderZipField(parent,f,data,tpl,interactive,scale,highlightFieldId,onl
 
   Object.assign(global, {
     renderNormalField,
-    renderZipField
+    renderZipField,
+    appendFieldResizeHandles
   });
   global.EnvelopePrintFieldRenderer = Object.freeze({
     renderNormalField,
-    renderZipField
+    renderZipField,
+    appendFieldResizeHandles
   });
 })(typeof window !== 'undefined' ? window : globalThis);
 
@@ -3711,9 +3757,45 @@ function isTestPrintIntent(intent){
 function getPrintIntentLabel(intent){
   return isTestPrintIntent(intent) ? '試し印刷' : '本印刷';
 }
+/* v41-5: 範囲指定印刷。手差し封筒は数百件を1ジョブで通せないため、
+   「N件目からM件」を指定して分割印刷・紙詰まり後の途中再開を可能にする。
+   タブ内の一時状態としてだけ保持し、保存形式は変更しない。 */
+let productionPrintRange = {start:1, count:0}; // count=0 は「最後まで」
+function setProductionPrintRange(start, count){
+  const s = Math.max(1, Math.floor(Number(start) || 1));
+  const c = Math.max(0, Math.floor(Number(count) || 0));
+  productionPrintRange = {start:s, count:c};
+  return productionPrintRange;
+}
+function clearProductionPrintRange(){
+  productionPrintRange = {start:1, count:0};
+  return productionPrintRange;
+}
+function getProductionPrintRange(){
+  return {start:productionPrintRange.start, count:productionPrintRange.count};
+}
+function isProductionPrintRangeActive(total){
+  const n = Math.max(0, Number(total) || 0);
+  if(productionPrintRange.start > 1) return true;
+  if(productionPrintRange.count > 0 && productionPrintRange.count < n) return true;
+  return false;
+}
+function describeProductionPrintRange(total){
+  const n = Math.max(0, Number(total) || 0);
+  if(!n) return '対象なし';
+  const start = Math.min(productionPrintRange.start, n);
+  const end = productionPrintRange.count > 0 ? Math.min(n, start + productionPrintRange.count - 1) : n;
+  return `${start}件目〜${end}件目（${end - start + 1}件） / 全${n}件`;
+}
 function getEffectivePrintQueueForIntent(validQueue, intent){
   const list = Array.isArray(validQueue) ? validQueue : [];
-  return isTestPrintIntent(intent) ? list.slice(0, 1) : list.slice();
+  if(isTestPrintIntent(intent)) return list.slice(0, 1);
+  // v41-5: 本印刷では範囲指定を適用する。startが件数を超える場合は空（誤印刷防止）。
+  const start = Math.max(1, productionPrintRange.start);
+  if(start > list.length) return [];
+  const begin = start - 1;
+  const end = productionPrintRange.count > 0 ? begin + productionPrintRange.count : list.length;
+  return list.slice(begin, end);
 }
 function renderPrintIntentGuide(t, validQueue, intent){
   const mode = normalizePrintIntent(intent);
@@ -3779,15 +3861,19 @@ function getPrintDialogCheckItems(tpl){
 
 function renderPrintDialogCheckPanel(tpl, disabled){
   const items = getPrintDialogCheckItems(tpl);
+  // v41-6: 確認の形骸化（チェック疲れ）対策。5個の個別チェックを、確認内容の一覧＋
+  // 単一の確認チェックに統合する。確認すべき内容自体は全項目をそのまま表示する。
+  // arePrintDialogChecksConfirmed は data-print-dialog-check の全チェックを見るため互換。
   return `<div class="info-banner print-dialog-check-panel" style="margin-bottom:12px">
     <h4>A4扱い印刷事故を防ぐ最終確認</h4>
     <div style="font-size:12px;line-height:1.7;margin-bottom:8px">ブラウザの印刷ダイアログでは、下の項目を目視確認してください。文書サイズがA4のままなら、印字位置が合っていても印刷失敗の原因になります。</div>
-    <div style="display:flex;flex-direction:column;gap:6px">
-      ${items.map(it=>`<label class="confirm-box print-dialog-check" style="margin:0;${disabled?'opacity:.55':''}">
-        <input type="checkbox" data-print-dialog-check="${escapeHtml(it.key)}" ${disabled?'disabled':''}>
-        <span style="font-size:12px;line-height:1.5"><strong>${escapeHtml(it.label)}</strong><br><span style="color:#666">${escapeHtml(it.detail)}</span></span>
-      </label>`).join('')}
+    <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px">
+      ${items.map(it=>`<div style="font-size:12px;line-height:1.5;${disabled?'opacity:.55':''}"><strong>・${escapeHtml(it.label)}</strong>：<span style="color:#666">${escapeHtml(it.detail)}</span></div>`).join('')}
     </div>
+    <label class="confirm-box print-dialog-check" style="margin:0;${disabled?'opacity:.55':''}">
+      <input type="checkbox" data-print-dialog-check="all" ${disabled?'disabled':''}>
+      <span style="font-size:12px;line-height:1.5"><strong>上記${items.length}項目（文書サイズ・プリンタキュー・給紙・倍率余白・向き）を印刷ダイアログで確認します</strong></span>
+    </label>
   </div>`;
 }
 
@@ -3937,8 +4023,28 @@ function renderPrintActionArea(){
         ? '<div style="margin-top:8px;font-weight:600">簡単モードでは、この状態のまま本印刷できません。</div>'
         : '<div style="margin-top:8px">詳細モードのため、確認後に強行印刷できます。</div>'}
     </div>` : '';
+  // v41-5: 範囲指定印刷パネル（本印刷・複数件のときのみ表示）。
+  const rangeActive = isProductionPrintRangeActive(validQueue.length);
+  const range = getProductionPrintRange();
+  const rangePanel = (intent !== 'test' && validQueue.length > 1) ? `
+    <div class="info-banner" style="margin-bottom:12px${rangeActive?';border-color:var(--accent)':''}">
+      <h4>範囲指定印刷（手差し分割・途中再開用）</h4>
+      <div style="font-size:12px;line-height:1.7;margin-bottom:8px">手差し封筒は一度に大量投入できません。分割して印刷する場合や、紙詰まり後に途中から再開する場合に指定してください。印刷した宛先は「試行履歴」タブに記録されます。</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label style="font-size:12px;display:flex;align-items:center;gap:4px">開始
+          <input type="number" id="printRangeStart" min="1" max="${validQueue.length}" step="1" value="${Math.min(range.start, Math.max(1,validQueue.length))}" style="width:70px"> 件目から
+        </label>
+        <label style="font-size:12px;display:flex;align-items:center;gap:4px">
+          <input type="number" id="printRangeCount" min="0" step="1" value="${range.count}" style="width:70px"> 件（0=最後まで）
+        </label>
+        <button class="btn sm" id="btnApplyPrintRange">適用</button>
+        <button class="btn sm ghost" id="btnClearPrintRange" ${rangeActive?'':'disabled'}>解除</button>
+      </div>
+      <div style="font-size:12px;margin-top:8px;${rangeActive?'color:var(--accent);font-weight:600':'color:#666'}">対象: ${escapeHtml(describeProductionPrintRange(validQueue.length))}${rangeActive?'（範囲指定中）':''}</div>
+    </div>` : '';
   $('printActionArea').innerHTML=`
     ${renderPrintIntentGuide(t, validQueue, intent)}
+    ${rangePanel}
     ${renderPrintRunbook(intent)}
     ${issueHtml}
     ${renderJobGroupSummary()}
@@ -3965,6 +4071,27 @@ function renderPrintActionArea(){
   $('finalConfirm').addEventListener('change',updatePrintButtonEnabled);
   $('manualFeedConfirm').addEventListener('change',updatePrintButtonEnabled);
   document.querySelectorAll('[data-print-dialog-check]').forEach(el=>el.addEventListener('change', updatePrintButtonEnabled));
+  // v41-5: 範囲指定の適用・解除。適用後はStep5全体（件数・チェックリスト・プレビュー）を再描画する。
+  const rangeApplyBtn=$('btnApplyPrintRange');
+  if(rangeApplyBtn){
+    rangeApplyBtn.addEventListener('click',()=>{
+      const s=+($('printRangeStart')&&$('printRangeStart').value)||1;
+      const c=+($('printRangeCount')&&$('printRangeCount').value)||0;
+      if(s<1 || s>validQueue.length){toast(`開始は1〜${validQueue.length}の範囲で指定してください`,'warn');return}
+      if(c<0){toast('件数は0以上で指定してください','warn');return}
+      setProductionPrintRange(s,c);
+      renderStep5();
+      toast(`印刷範囲を設定: ${describeProductionPrintRange(validQueue.length)}`,'ok');
+    });
+  }
+  const rangeClearBtn=$('btnClearPrintRange');
+  if(rangeClearBtn){
+    rangeClearBtn.addEventListener('click',()=>{
+      clearProductionPrintRange();
+      renderStep5();
+      toast('範囲指定を解除しました（全件印刷）','ok');
+    });
+  }
   $('btnPrint').addEventListener('click',executePrint);
   document.querySelectorAll('#printActionArea .job-select').forEach(btn=>btn.addEventListener('click',async ()=>{
     state.selectedTplId=btn.dataset.tpl;
@@ -4009,9 +4136,15 @@ async function executePrint(){
     // v37 step39: 強行印刷確認をブラウザ標準confirmからDOMモーダルへ移行する。
     if(!await showAppConfirm(`⚠ 危険な状態です。\n\n・${hardIssues.join('\n・')}\n\nそれでも詳細モードとして強行印刷しますか？`,'強行印刷の確認',{okLabel:'強行印刷ダイアログへ進む',danger:true})) return;
   }
-  if(intent !== 'test' && valid.length!==state.queue.length){
-    // v37 step39: テンプレート不一致スキップ確認をDOMモーダルへ移行する。
-    if(!await showAppConfirm(`${state.queue.length}件中${valid.length}件のみ印刷します（テンプレ不一致${state.queue.length-valid.length}件をスキップ）。続行しますか？`,'一部印刷の確認',{okLabel:'続行する',danger:true})) return;
+  if(intent !== 'test'){
+    // v41-5: 一部印刷の確認を「テンプレ不一致スキップ」と「範囲指定」で正しく分離する。
+    const mismatchCount = state.queue.length - validAll.length;
+    if(mismatchCount > 0){
+      if(!await showAppConfirm(`${state.queue.length}件中${validAll.length}件のみ印刷対象です（テンプレ不一致${mismatchCount}件をスキップ）。続行しますか？`,'一部印刷の確認',{okLabel:'続行する',danger:true})) return;
+    }
+    if(valid.length !== validAll.length){
+      if(!await showAppConfirm(`範囲指定により、対象${validAll.length}件のうち ${describeProductionPrintRange(validAll.length)} を印刷します。続行しますか？`,'範囲指定印刷の確認',{okLabel:'この範囲を印刷する'})) return;
+    }
   }
   const productionReadiness = intent === 'test'
     ? {apply:false, blocked:false, reason:'試し印刷ではA4共通補正の本印刷適用は使いません。'}
@@ -4022,7 +4155,9 @@ async function executePrint(){
     toast(productionReadiness.reason || 'A4共通補正の本印刷適用条件を確認してください','warn');
     return;
   }
-  if(!await confirmManualFeedBeforePrint(t, valid.length, intent)) return;
+  // v41-6: confirmManualFeedBeforePrint モーダルは、直前のチェックリスト
+  // （手差しセット確認・印刷ダイアログ確認）と内容が完全に重複し確認の形骸化を招くため廃止。
+  // 関数自体は互換のため残置。
   const a4ProductionRun = productionReadiness.apply === true && typeof global.recordA4CalibrationProductionPrintAttempt === 'function'
     ? global.recordA4CalibrationProductionPrintAttempt({queueCount:valid.length, printMode:'a4-calibration-production', result:'pending'})
     : null;
@@ -4068,6 +4203,11 @@ function doPrint(opts){
     getPrintIntent,
     clearPrintIntent,
     isTestPrintIntent,
+    setProductionPrintRange,
+    clearProductionPrintRange,
+    getProductionPrintRange,
+    isProductionPrintRangeActive,
+    describeProductionPrintRange,
     getEffectivePrintQueueForIntent,
     renderPrintIntentGuide,
     getPrintPaperSpec,
@@ -4096,6 +4236,11 @@ function doPrint(opts){
     getPrintIntent,
     clearPrintIntent,
     isTestPrintIntent,
+    setProductionPrintRange,
+    clearProductionPrintRange,
+    getProductionPrintRange,
+    isProductionPrintRangeActive,
+    describeProductionPrintRange,
     getEffectivePrintQueueForIntent,
     renderPrintIntentGuide,
     getPrintPaperSpec,
@@ -5709,15 +5854,15 @@ function renderQueue(){
   if(!state.queue.length){
     list.innerHTML='<div class="empty-state" style="padding:20px 10px">キューは空です</div>';return;
   }
-  list.innerHTML='';
-  state.queue.forEach((q,i)=>{
+  // v41-4: 大量宛名対応。ボタン毎のリスナー生成をやめ、リスト1個のイベント委譲に変更。
+  // 並べ替えに ⇈（先頭へ）/⇊（末尾へ）を追加し、数百件でも目的の位置へ動かせるようにする。
+  const html=state.queue.map((q,i)=>{
     const tplOfQ=getTpl(q.tplId);
     const mismatch=q.tplId!==state.selectedTplId;
-    const el=document.createElement('div');
-    el.className='queue-item'+(mismatch?' mismatch':'');
     const primary=q.name||q.corp||'(無名)';
     const secondary=q.name&&q.corp?q.corp:(q.addr||'');
-    el.innerHTML=`<span class="idx">${String(i+1).padStart(2,'0')}</span>
+    return `<div class="queue-item${mismatch?' mismatch':''}">
+      <span class="idx">${String(i+1).padStart(2,'0')}</span>
       <div>
         <div class="qi-name">${escapeHtml(primary)} ${escapeHtml(q.honor||'')}</div>
         <div class="qi-addr">${escapeHtml((secondary||'').slice(0,28))}${(secondary||'').length>28?'…':''}</div>
@@ -5725,32 +5870,39 @@ function renderQueue(){
       </div>
       <div class="qi-acts">
         <button data-i="${i}" data-act="edit">訂正</button>
-        <button data-i="${i}" data-act="up">↑</button>
-        <button data-i="${i}" data-act="dn">↓</button>
-        <button data-i="${i}" data-act="rm">×</button>
-      </div>`;
-    list.appendChild(el);
-  });
-  list.querySelectorAll('button').forEach(b=>{
-    b.addEventListener('click',()=>{
-      const i=+b.dataset.i,a=b.dataset.act;
-      if(a==='edit'){
-        if(typeof startQueueItemEdit === 'function') startQueueItemEdit(i);
-        return;
-      }
-      if(a==='up'&&i>0) [state.queue[i-1],state.queue[i]]=[state.queue[i],state.queue[i-1]];
-      if(a==='dn'&&i<state.queue.length-1) [state.queue[i+1],state.queue[i]]=[state.queue[i],state.queue[i+1]];
-      if(a==='rm'){
-        state.queue.splice(i,1);
-        if(state.editingQueueIndex===i) state.editingQueueIndex=null;
-        else if(Number.isInteger(state.editingQueueIndex) && state.editingQueueIndex>i) state.editingQueueIndex--;
-      }
-      save();renderQueue();
-      if(typeof updateQueueEditMode === 'function') updateQueueEditMode();
-      $('step3Next').disabled=state.queue.length===0;
-      renderSteps();
-    });
-  });
+        <button data-i="${i}" data-act="top" title="先頭へ移動">⇈</button>
+        <button data-i="${i}" data-act="up" title="1つ上へ">↑</button>
+        <button data-i="${i}" data-act="dn" title="1つ下へ">↓</button>
+        <button data-i="${i}" data-act="bottom" title="末尾へ移動">⇊</button>
+        <button data-i="${i}" data-act="rm" title="キューから削除">×</button>
+      </div>
+    </div>`;
+  }).join('');
+  list.innerHTML=html;
+  // onclick代入で重複リスナーを防ぐ（renderQueueは頻繁に再実行されるため）。
+  list.onclick=(ev)=>{
+    const b=ev.target && ev.target.closest ? ev.target.closest('button[data-act]') : null;
+    if(!b || !list.contains(b)) return;
+    const i=+b.dataset.i,a=b.dataset.act;
+    if(!Number.isInteger(i) || i<0 || i>=state.queue.length) return;
+    if(a==='edit'){
+      if(typeof startQueueItemEdit === 'function') startQueueItemEdit(i);
+      return;
+    }
+    if(a==='up'&&i>0) [state.queue[i-1],state.queue[i]]=[state.queue[i],state.queue[i-1]];
+    if(a==='dn'&&i<state.queue.length-1) [state.queue[i+1],state.queue[i]]=[state.queue[i],state.queue[i+1]];
+    if(a==='top'&&i>0){ const [it]=state.queue.splice(i,1); state.queue.unshift(it); }
+    if(a==='bottom'&&i<state.queue.length-1){ const [it]=state.queue.splice(i,1); state.queue.push(it); }
+    if(a==='rm'){
+      state.queue.splice(i,1);
+      if(state.editingQueueIndex===i) state.editingQueueIndex=null;
+      else if(Number.isInteger(state.editingQueueIndex) && state.editingQueueIndex>i) state.editingQueueIndex--;
+    }
+    save();renderQueue();
+    if(typeof updateQueueEditMode === 'function') updateQueueEditMode();
+    $('step3Next').disabled=state.queue.length===0;
+    renderSteps();
+  };
 }
 
 /* ===== v38-12 extracted from 10_core.js: cloneQueueItemFromRecord ===== */
@@ -5763,12 +5915,45 @@ function cloneQueueItemFromRecord(record, tplId){
   delete q.historyKind;
   delete q.status;
   delete q.savedAt;
+  // v41-3: 履歴マージ表示用の内部キーと印刷試行メタは、キューへ戻す際に持ち込まない。
+  delete q._at;
+  delete q._recKind;
+  delete q.printIntent;
+  delete q.a4CalibrationProductionApplied;
+  delete q.a4CalibrationProductionRunId;
   q.tplId = tplId;
   return q;
 }
 
 
 /* ===== v38-12 extracted from 10_core.js: renderAddrbook ===== */
+function queueDupKey(rec, tplId){
+  // v41-4: キュー重複判定キー。氏名・会社・住所・テンプレの一致で「投入済み」とみなす。
+  return [tplId||'', rec.name||'', rec.corp||'', rec.company||'', rec.addr||''].join('\u0000');
+}
+function getQueuedKeySet(){
+  const set=new Set();
+  state.queue.forEach(qi=>set.add(queueDupKey(qi, qi.tplId)));
+  return set;
+}
+function bulkAddAddrbookToQueue(records){
+  // v41-4: 大量宛名対応。住所録の表示中レコードをまとめてキューへ。既投入分はスキップする。
+  const queued=getQueuedKeySet();
+  let added=0, skipped=0;
+  (records||[]).forEach(a=>{
+    const item=cloneQueueItemFromRecord(a, state.selectedTplId);
+    const key=queueDupKey(item, state.selectedTplId);
+    if(queued.has(key)){skipped++;return}
+    queued.add(key);
+    state.queue.push(item);
+    added++;
+  });
+  save();renderQueue();renderAddrbook();
+  $('step3Next').disabled=state.queue.length===0;
+  renderSteps();
+  toast(`${added}件をキューに追加${skipped?`（投入済み${skipped}件をスキップ）`:''}`, added?'ok':'warn');
+  return {added, skipped};
+}
 function renderAddrbook(){
   const list=$('abList');
   const q=($('abSearch')&&$('abSearch').value||'').toLowerCase();
@@ -5781,10 +5966,30 @@ function renderAddrbook(){
     return;
   }
   list.innerHTML='';
+  // v41-4: 一括キュー投入バー。検索で絞り込んだ表示中レコードを対象にする。
+  const queuedKeys=getQueuedKeySet();
+  const bulkBar=document.createElement('div');
+  bulkBar.style.cssText='display:flex;align-items:center;gap:8px;padding:8px;background:var(--paper-2);border:1px solid var(--line-soft);margin-bottom:8px';
+  const bulkInfo=document.createElement('span');
+  bulkInfo.style.cssText='flex:1;font-size:11px;color:#666';
+  bulkInfo.textContent=q?`検索結果 ${filtered.length}件`:`住所録 ${filtered.length}件`;
+  const bulkBtn=document.createElement('button');
+  bulkBtn.className='btn sm accent';
+  bulkBtn.textContent=`表示中の${filtered.length}件を全てキューへ`;
+  bulkBtn.addEventListener('click',async ()=>{
+    if(filtered.length>20){
+      if(!await showAppConfirm(`表示中の${filtered.length}件をまとめて印刷キューに追加しますか？\n（既にキューにある宛先はスキップされます）`,'一括キュー追加',{okLabel:'追加する'})) return;
+    }
+    bulkAddAddrbookToQueue(filtered);
+  });
+  bulkBar.appendChild(bulkInfo);
+  bulkBar.appendChild(bulkBtn);
+  list.appendChild(bulkBar);
   filtered.forEach(a=>{
     const el=document.createElement('div');el.className='addrbook-item';
+    const inQueue=queuedKeys.has(queueDupKey(cloneQueueItemFromRecord(a, state.selectedTplId), state.selectedTplId));
     el.innerHTML=`<div>
-      <div class="nm">${escapeHtml(a.name||a.corp||'(無名)')} ${escapeHtml(a.honor||'')}</div>
+      <div class="nm">${escapeHtml(a.name||a.corp||'(無名)')} ${escapeHtml(a.honor||'')}${inQueue?' <span style="font-size:10px;background:var(--ink);color:var(--paper);padding:1px 5px;vertical-align:middle">キュー済</span>':''}</div>
       ${a.corp&&a.name?`<div class="ad">${escapeHtml(a.corp)}</div>`:''}
       <div class="ad">${escapeHtml(a.zip||'')} ${escapeHtml((a.addr||'').slice(0,40))}${(a.addr||'').length>40?'…':''}</div>
     </div>
@@ -5795,7 +6000,7 @@ function renderAddrbook(){
     </div>`;
     el.querySelector('[data-act=add]').addEventListener('click',()=>{
       state.queue.push(cloneQueueItemFromRecord(a, state.selectedTplId));
-      save();renderQueue();
+      save();renderQueue();renderAddrbook();
       $('step3Next').disabled=state.queue.length===0;
       renderSteps();
       toast(`「${a.name||a.corp}」をキューに追加`,'ok');
@@ -5818,15 +6023,31 @@ function renderAddrbook(){
 /* ===== v38-12 extracted from 10_core.js: renderHistory ===== */
 function renderHistory(){
   const list=$('histList');
-  if(!state.history.length){list.innerHTML='<div class="empty-state">印刷履歴はまだありません</div>';return}
+  // v41-3: バグ修正。タブの件数は history+printAttempts 合算なのに、一覧は旧historyのみ
+  // 表示していたため、v38-11以降の印刷分（printAttemptsに記録）が一覧に出なかった。
+  // 両方をマージし、printedAt/attemptedAt の新しい順に直近100件を表示する。
+  const merged=[
+    ...(Array.isArray(state.history)?state.history:[]).map(h=>Object.assign({}, h, {_at:h.printedAt||0,_recKind:'history'})),
+    ...(Array.isArray(state.printAttempts)?state.printAttempts:[]).map(a=>Object.assign({}, a, {_at:a.attemptedAt||0,_recKind:'attempt'}))
+  ];
+  if(!merged.length){list.innerHTML='<div class="empty-state">印刷試行履歴はまだありません</div>';return}
+  merged.sort((a,b)=>(b._at||0)-(a._at||0));
   list.innerHTML='';
-  [...state.history].reverse().slice(0,100).forEach(h=>{
+  const note=document.createElement('div');
+  note.className='hint';
+  note.style.cssText='margin-bottom:8px';
+  note.textContent=`全${merged.length}件中、直近${Math.min(100,merged.length)}件を表示しています`;
+  list.appendChild(note);
+  merged.slice(0,100).forEach(h=>{
     const t=getTpl(h.tplId);
     const currentT=getCurrentTpl();
     const mismatch=h.tplId!==state.selectedTplId;
+    const kindLabel=h._recKind==='attempt'
+      ? (h.printIntent==='test'?'試し印刷':'印刷試行')
+      : '印刷履歴';
     const el=document.createElement('div');el.className='history-item';
     el.innerHTML=`<div>
-      <div class="dt">${fmtDate(h.printedAt)}</div>
+      <div class="dt">${fmtDate(h._at)} <span style="opacity:.65">[${escapeHtml(kindLabel)}]</span></div>
       <div class="nm">${escapeHtml(h.name||h.corp||'(無名)')} ${escapeHtml(h.honor||'')}</div>
       ${h.corp&&h.name?`<div class="meta">${escapeHtml(h.corp)}</div>`:''}
       <div class="meta">${escapeHtml((h.addr||'').slice(0,40))}</div>
@@ -5871,7 +6092,7 @@ function renderPasteImport(){
   const area=$('pasteImportArea');
   area.innerHTML=`<div class="paste-import">
     <h4 class="serif" style="font-size:14px;margin-bottom:8px">Excelからまとめて取込</h4>
-    <p style="font-size:11px;color:#666;margin-bottom:10px">Excelで住所表を選択 → Ctrl+C → 下のテキスト欄にCtrl+V。タブ区切り（Excel標準）/ カンマ区切りテキスト 両対応。カンマ区切りファイル読込ではありません</p>
+    <p style="font-size:11px;color:#666;margin-bottom:10px">Excelで住所表を選択 → Ctrl+C → 下のテキスト欄にCtrl+V。タブ区切り（Excel標準）/ カンマ区切りテキスト 両対応。カンマ区切りファイル読込ではありません。※カンマ区切りで引用符内に改行を含むデータは正しく分割できません（Excel貼付なら問題ありません）</p>
     <textarea class="paste-textarea" id="pasteTxt" placeholder="ここに貼り付け
 
 例：
@@ -6010,6 +6231,7 @@ function renderPastePreview(){
     </div>
     <div style="display:flex;gap:8px;margin-top:14px;align-items:center;flex-wrap:wrap">
       <label class="checkbox-row"><input type="checkbox" id="skipDuplicates" ${duplicates.size?'checked':''}><span>重複候補をスキップ</span></label>
+      <label class="checkbox-row"><input type="checkbox" id="pasteAlsoQueue" checked><span>取込と同時に印刷キューへ追加</span></label>
       <div style="flex:1"></div>
       <button class="btn primary" id="doPasteImport">${rows.length}件を住所録に取込</button>
     </div>
@@ -6028,8 +6250,11 @@ function renderPastePreview(){
 function doImportPaste(duplicates){
   if(!pasteAnalysis) return;
   const skipDup=$('skipDuplicates').checked;
+  // v41-4: 大量宛名対応。取込と同時に印刷キューへも追加できるようにする（住所録止まりを解消）。
+  const alsoQueue=!!($('pasteAlsoQueue')&&$('pasteAlsoQueue').checked);
   const {rows,guessMap,colCount}=pasteAnalysis;
-  let added=0,skipped=0;
+  let added=0,skipped=0,queuedCount=0;
+  const queuedKeys=alsoQueue?getQueuedKeySet():null;
   rows.forEach((r,idx)=>{
     if(skipDup&&duplicates.has(idx)){skipped++;return}
     const obj={id:uid('a')};
@@ -6046,6 +6271,15 @@ function doImportPaste(duplicates){
     if(!normalized.name && !normalized.corp && !normalized.company){skipped++;return}
     state.addressBook.push(normalized);
     added++;
+    if(alsoQueue){
+      const item=cloneQueueItemFromRecord(normalized, state.selectedTplId);
+      const key=queueDupKey(item, state.selectedTplId);
+      if(!queuedKeys.has(key)){
+        queuedKeys.add(key);
+        state.queue.push(item);
+        queuedCount++;
+      }
+    }
   });
   save();
   pasteAnalysis=null;
@@ -6053,15 +6287,22 @@ function doImportPaste(duplicates){
   $('pastePreview').innerHTML='';
   renderAddrbook();
   $('abTabCount').textContent=state.addressBook.length?`(${state.addressBook.length})`:'';
+  if(alsoQueue){
+    renderQueue();
+    $('step3Next').disabled=state.queue.length===0;
+  }
   renderSteps();
-  toast(`${added}件取込（${skipped}件スキップ）`,'ok');
-  switchInputPane('addrbook');
+  toast(`${added}件取込（${skipped}件スキップ）${alsoQueue?` / キューへ${queuedCount}件追加`:''}`,'ok');
+  switchInputPane(alsoQueue?'addrbook':'addrbook');
 }
 
 
   const Step3QueueUiApi = Object.freeze({
     renderQueue,
     cloneQueueItemFromRecord,
+    queueDupKey,
+    getQueuedKeySet,
+    bulkAddAddrbookToQueue,
     renderAddrbook,
     renderHistory,
     addToHistory,
@@ -6074,6 +6315,9 @@ function doImportPaste(duplicates){
   Object.assign(global, {
     renderQueue,
     cloneQueueItemFromRecord,
+    queueDupKey,
+    getQueuedKeySet,
+    bulkAddAddrbookToQueue,
     renderAddrbook,
     renderHistory,
     addToHistory,
@@ -6210,6 +6454,46 @@ function printStep4CrossTest(){
   return true;
 }
 
+/* v41-8: 大量印刷前のテストは「最も収まりにくい宛先」で行うのが実用的。
+   fitText（決定論的mm計算）で全キューを採点し、あふれ>縮小>文字長の順で最悪の1件を選ぶ。 */
+function pickWorstCaseQueueItem(valid, tpl){
+  if(!valid.length || !tpl) return null;
+  let best=null, bestScore=-1;
+  valid.forEach(q=>{
+    const data=typeof normalizeAddressData==='function'?normalizeAddressData(Object.assign({},q)):Object.assign({},q);
+    let score=0;
+    (tpl.fields||[]).forEach(f=>{
+      if(!f || !f.id || f.source==='zip' || f.source==='image') return;
+      const baseRect={x:Number(f.x||0),y:Number(f.y||0),w:Number(f.w||0),h:Number(f.h||0)};
+      const zones=tpl.excludeZones||[];
+      const rect=f.autoFit && typeof adjustFieldRect==='function'?adjustFieldRect(f,zones,tpl.w,tpl.h):baseRect;
+      const text=typeof getFieldText==='function'?getFieldText(f,data,{tpl}):'';
+      if(!text) return;
+      score += String(text).length; // 同点時は文字長で差をつける
+      if(f.autoFit && typeof fitText==='function'){
+        const fit=fitText(text,f,rect);
+        if(!fit.fit) score += 100000;            // あふれ（5ptでも収まらない）が最優先
+        else if(fit.small) score += 10000;       // 8pt未満への縮小
+        else score += Math.max(0,(Number(f.fontSize)||12)-fit.fontSize)*100; // 縮小幅
+      }
+    });
+    if(score>bestScore){bestScore=score;best=q;}
+  });
+  return best;
+}
+
+function printStep4WorstCaseQueueItem(){
+  const t=getCurrentTpl();if(!t){toast('テンプレートが選択されていません','warn');return false}
+  const valid=state.queue.filter(q=>q.tplId===state.selectedTplId);
+  if(!valid.length){toast('現テンプレに対応する宛先がキューにありません','warn');return false}
+  const worst=pickWorstCaseQueueItem(valid, t);
+  if(!worst){toast('対象を選定できませんでした','warn');return false}
+  const idx=valid.indexOf(worst)+1;
+  toast(`キュー${idx}件目「${worst.name||worst.corp||'(無名)'}」でテスト印刷します（最も収まりにくい宛先）`,'ok');
+  doPrint({queue:[worst]});
+  return true;
+}
+
 /* ===== v38-33: Step4 fixed event binder ===== */
 function bindEventsForStep4(){
   const bindClick = global.safeBindClick || ((el, handler)=>el.addEventListener('click', handler));
@@ -6219,6 +6503,7 @@ function bindEventsForStep4(){
   bindClick($('btnRemoveMismatch'), removeQueueMismatchFromCurrentTemplate, 'btnRemoveMismatch');
   bindClick($('btnTestSample'), printStep4Sample, 'btnTestSample');
   bindClick($('btnTestFirst'), printStep4FirstQueueItem, 'btnTestFirst');
+  bindClick($('btnTestWorst'), printStep4WorstCaseQueueItem, 'btnTestWorst');
   bindClick($('btnTestCross'), printStep4CrossTest, 'btnTestCross');
   const bindOptionalA4Test = (id, fnName)=>{
     const el = global.document && global.document.getElementById(id);
@@ -6249,6 +6534,8 @@ const Step4TestPrintUiApi = Object.freeze({
   removeQueueMismatchFromCurrentTemplate,
   printStep4Sample,
   printStep4FirstQueueItem,
+  pickWorstCaseQueueItem,
+  printStep4WorstCaseQueueItem,
   printStep4CrossTest,
   bindEventsForStep4
 });
@@ -6261,6 +6548,8 @@ const Step4TestPrintUiApi = Object.freeze({
     removeQueueMismatchFromCurrentTemplate,
     printStep4Sample,
     printStep4FirstQueueItem,
+    pickWorstCaseQueueItem,
+    printStep4WorstCaseQueueItem,
     printStep4CrossTest,
     bindEventsForStep4,
     EnvelopePrintStep4TestPrintUI: Step4TestPrintUiApi
@@ -6344,10 +6633,14 @@ function collectPrintPreviewWarnings(tpl, queue, opts){
       const baseRect={x:Number(f.x||0),y:Number(f.y||0),w:Number(f.w||0),h:Number(f.h||0)};
       const rect=f.autoFit && typeof adjustFieldRect === 'function' ? adjustFieldRect(f,zones,tpl.w,tpl.h) : baseRect;
       const text=typeof getFieldText === 'function' ? getFieldText(f,data,{tpl}) : '';
-      const fit=f.autoFit && typeof fitText === 'function' ? fitText(text,f,rect) : {fit:true,text:text,fontSize:f.fontSize||12};
+      const fit=f.autoFit && typeof fitText === 'function' ? fitText(text,f,rect) : {fit:true,small:false,text:text,fontSize:f.fontSize||12};
       const avoidAdjusted=!!(f.autoFit && !ignoreAvoidZones && (tpl.excludeZones||[]).length && fieldRectDiffers(baseRect, rect));
       if(!fit.fit){
         out.push({kind:'overflow',fieldId:f.id,fieldLabel:getPreviewWarningFieldLabel(f),queueIndex,queueLabel:getPreviewWarningQueueLabel(q,queueIndex),text:String(text||'').replace(/\s+/g,' ').trim().slice(0,60)});
+      }
+      // v41-1: 8pt未満まで縮小して収めた宛先も件数として報告する（収まってはいるが読みにくい）。
+      if(fit.fit && fit.small){
+        out.push({kind:'small-font',fieldId:f.id,fieldLabel:getPreviewWarningFieldLabel(f),queueIndex,queueLabel:getPreviewWarningQueueLabel(q,queueIndex),text:String(text||'').replace(/\s+/g,' ').trim().slice(0,60)});
       }
       if(avoidAdjusted){
         out.push({kind:'avoid-zone',fieldId:f.id,fieldLabel:getPreviewWarningFieldLabel(f),queueIndex,queueLabel:getPreviewWarningQueueLabel(q,queueIndex),text:String(text||'').replace(/\s+/g,' ').trim().slice(0,60)});
@@ -6366,9 +6659,10 @@ function summarizePrintPreviewWarnings(warnings){
     item.count++;
     if(item.samples.length<3) item.samples.push({queueLabel:w.queueLabel,text:w.text});
   });
+  const kindRank=k=>k==='overflow'?0:(k==='small-font'?1:2);
   return Array.from(map.values()).sort((a,b)=>{
-    const ka=a.kind==='overflow'?0:1;
-    const kb=b.kind==='overflow'?0:1;
+    const ka=kindRank(a.kind);
+    const kb=kindRank(b.kind);
     if(ka!==kb) return ka-kb;
     return b.count-a.count;
   });
@@ -6378,6 +6672,7 @@ function appendPreviewWarningSummaryPanel(stack,tpl,validQueue,opts){
   const warnings=summarizePrintPreviewWarnings(collectPrintPreviewWarnings(tpl, validQueue, opts));
   if(!warnings.length) return;
   const overflowCount=warnings.filter(w=>w.kind==='overflow').reduce((n,w)=>n+w.count,0);
+  const smallCount=warnings.filter(w=>w.kind==='small-font').reduce((n,w)=>n+w.count,0);
   const avoidCount=warnings.filter(w=>w.kind==='avoid-zone').reduce((n,w)=>n+w.count,0);
   const panel=document.createElement('div');
   panel.className='warn-banner print-preview-warning-summary';
@@ -6386,7 +6681,7 @@ function appendPreviewWarningSummaryPanel(stack,tpl,validQueue,opts){
   panel.appendChild(title);
   const lead=document.createElement('div');
   lead.style.cssText='font-size:12px;line-height:1.7;margin-bottom:8px';
-  lead.textContent=`文字あふれ ${overflowCount} 件 / 避ける範囲の影響 ${avoidCount} 件。印刷前に詳細編集で対象項目の幅・高さ・行間・文字サイズを確認してください。`;
+  lead.textContent=`文字あふれ ${overflowCount} 件 / 8pt未満への縮小 ${smallCount} 件 / 避ける範囲の影響 ${avoidCount} 件。印刷前に詳細編集で対象項目の幅・高さ・行間・文字サイズを確認してください。`;
   panel.appendChild(lead);
   const list=document.createElement('div');
   list.style.cssText='display:flex;flex-direction:column;gap:6px';
@@ -6397,7 +6692,7 @@ function appendPreviewWarningSummaryPanel(stack,tpl,validQueue,opts){
     const body=document.createElement('div');
     body.style.cssText='flex:1;min-width:220px;font-size:12px;line-height:1.55';
     const head=document.createElement('div');
-    head.innerHTML=`<strong>${escapeHtml(w.kind==='overflow'?'文字あふれ':'避ける範囲の影響')}</strong>：${escapeHtml(w.fieldLabel)} <span style="color:#666">(${w.count}件)</span>`;
+    head.innerHTML=`<strong>${escapeHtml(w.kind==='overflow'?'文字あふれ':(w.kind==='small-font'?'8pt未満へ縮小':'避ける範囲の影響'))}</strong>：${escapeHtml(w.fieldLabel)} <span style="color:#666">(${w.count}件)</span>`;
     body.appendChild(head);
     const sample=document.createElement('div');
     sample.style.color='#666';
@@ -6507,6 +6802,10 @@ function appendAvoidZoneSafetyPanel(stack,tpl){
   stack.appendChild(panel);
 }
 
+/* v41-7: Step5プレビューの段階表示用（タブ内一時状態、保存しない） */
+const STEP5_PREVIEW_CHUNK = 20;
+let step5PreviewLimit = STEP5_PREVIEW_CHUNK;
+
 /* ===== v38-12 extracted from 10_core.js: renderStep5 ===== */
 function renderStep5(){
   const t=getCurrentTpl();
@@ -6577,7 +6876,10 @@ function renderStep5(){
     return;
   }
   appendPreviewCorrectionList(stack, validQueue);
-  validQueue.forEach((q,i)=>{
+  // v41-7: 大量宛名対応。プレビューを全件同期描画するとキュー数百件でフリーズするため、
+  // 先頭から段階的に表示する。警告サマリー（上）は全件を純計算で走査するため網羅性は維持される。
+  const shown=Math.min(validQueue.length, Math.max(STEP5_PREVIEW_CHUNK, step5PreviewLimit));
+  validQueue.slice(0, shown).forEach((q,i)=>{
     const env=document.createElement('div');
     env.className='mini-envelope';
     env.style.width=(t.w*previewScale)+'mm';
@@ -6602,6 +6904,36 @@ function renderStep5(){
     wrap.appendChild(label);wrap.appendChild(env);
     stack.appendChild(wrap);
   });
+  if(validQueue.length > shown){
+    const moreWrap=document.createElement('div');
+    moreWrap.style.cssText='text-align:center;padding:12px;display:flex;gap:8px;justify-content:center;align-items:center;flex-wrap:wrap';
+    const info=document.createElement('span');
+    info.style.cssText='font-size:12px;color:#666';
+    info.textContent=`残り${validQueue.length - shown}件のプレビューは省略中（印刷には全件含まれます）`;
+    const moreBtn=document.createElement('button');
+    moreBtn.className='btn sm ghost';
+    moreBtn.type='button';
+    moreBtn.textContent=`+${Math.min(STEP5_PREVIEW_CHUNK, validQueue.length - shown)}件表示`;
+    moreBtn.addEventListener('click',()=>{
+      step5PreviewLimit = shown + STEP5_PREVIEW_CHUNK;
+      renderStep5();
+    });
+    const allBtn=document.createElement('button');
+    allBtn.className='btn sm ghost';
+    allBtn.type='button';
+    allBtn.textContent='すべて表示';
+    allBtn.addEventListener('click',()=>{
+      step5PreviewLimit = validQueue.length;
+      renderStep5();
+    });
+    moreWrap.appendChild(info);
+    moreWrap.appendChild(moreBtn);
+    moreWrap.appendChild(allBtn);
+    stack.appendChild(moreWrap);
+  } else {
+    // 全件表示済みなら次回入場時に初期値へ戻す。
+    step5PreviewLimit = STEP5_PREVIEW_CHUNK;
+  }
 }
 
 function startLayoutCorrectionFromPreview(queueItem){
@@ -9077,6 +9409,8 @@ button,input,select,textarea{font-family:inherit}
 .new-tpl-cta .hint{font-size:11px;color:#888;margin-top:4px}
 
 .step3-layout{display:grid;grid-template-columns:1fr 380px;gap:20px;align-items:start}
+/* v41-9: 狭幅画面ではキューを下段に落とす（他レイアウトの900px系対応と整合） */
+@media(max-width:980px){.step3-layout{grid-template-columns:1fr}.queue-area{position:static}}
 .step4-layout{display:grid;grid-template-columns:1fr 320px;gap:20px;align-items:start}
 .step5-layout{display:grid;grid-template-columns:1fr 360px;gap:20px;align-items:start}
 
@@ -9116,14 +9450,14 @@ input:disabled,select:disabled,textarea:disabled{background:#f0ebe0;color:#999;c
 .envelope.adding-zone .field{pointer-events:none}
 .print-layer{position:absolute;top:0;left:0;width:100%;height:100%;transform-origin:top left;pointer-events:auto}
 
-@media print{.envelope-bg,.exclude-zone,.field-warning-icon,.zip-grid,.field-resize-corner,.field-toolbar{display:none !important}}
+@media print{.envelope-bg,.exclude-zone,.field-warning-icon,.zip-grid,.field-resize-corner,.field-resize-handle,.field-toolbar{display:none !important}}
 
 .exclude-zone{position:absolute;background-image:repeating-linear-gradient(45deg,rgba(196,77,46,0.18) 0,rgba(196,77,46,0.18) 4px,transparent 4px,transparent 9px);border:1.5px solid rgba(196,77,46,0.7);cursor:move;z-index:5}
 .exclude-zone.selected,.exclude-zone:focus{border:2px solid var(--warn);outline:none}
 .exclude-zone .label{position:absolute;top:2px;right:4px;max-width:calc(100% - 8px);font-size:11px;color:var(--warn);font-family:monospace;font-weight:600;background:rgba(255,255,255,0.88);padding:1px 4px;pointer-events:none;display:none;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.exclude-zone.selected .label{display:block}
 .exclude-zone .resize-corner{position:absolute;width:10px;height:10px;background:var(--warn);right:-5px;bottom:-5px;cursor:nwse-resize}
 /* v37 step18: 封筒上のドラッグ操作をタッチでも安定させる */
-.field,.field-resize-corner,.exclude-zone,.exclude-zone .resize-corner,.envelope.adding-zone{touch-action:none}
+.field,.field-resize-corner,.field-resize-handle,.exclude-zone,.exclude-zone .resize-corner,.envelope.adding-zone{touch-action:none}
 .zone-draft{position:absolute;background:rgba(196,77,46,0.18);border:1.5px dashed var(--warn);pointer-events:none}
 
 .field{position:absolute;border:1px dashed transparent;cursor:move;user-select:none;padding:0;transition:border-color 0.15s,background 0.15s;display:flex;z-index:10}
@@ -9136,6 +9470,16 @@ input:disabled,select:disabled,textarea:disabled{background:#f0ebe0;color:#999;c
 .field-warning-icon{position:absolute;top:-8px;left:-8px;width:18px;height:18px;border-radius:50%;background:var(--warn);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;z-index:20}
 
 .field-resize-corner{position:absolute;width:10px;height:10px;right:-5px;bottom:-5px;background:var(--accent);border:1px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.18);cursor:nwse-resize;display:none;z-index:30}
+/* v41-2: 印字範囲の枠を直接つかむ8方向リサイズハンドル */
+.field-resize-handle{position:absolute;width:10px;height:10px;background:var(--accent);border:1px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.18);display:none;z-index:30}
+.field-resize-handle.dir-nw{left:-5px;top:-5px;cursor:nwse-resize}
+.field-resize-handle.dir-n{left:50%;top:-5px;margin-left:-5px;cursor:ns-resize}
+.field-resize-handle.dir-ne{right:-5px;top:-5px;cursor:nesw-resize}
+.field-resize-handle.dir-e{right:-5px;top:50%;margin-top:-5px;cursor:ew-resize}
+.field-resize-handle.dir-se{right:-5px;bottom:-5px;cursor:nwse-resize}
+.field-resize-handle.dir-s{left:50%;bottom:-5px;margin-left:-5px;cursor:ns-resize}
+.field-resize-handle.dir-sw{left:-5px;bottom:-5px;cursor:nesw-resize}
+.field-resize-handle.dir-w{left:-5px;top:50%;margin-top:-5px;cursor:ew-resize}
 .field-toolbar{position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);writing-mode:horizontal-tb;display:flex;align-items:center;gap:2px;padding:3px 4px;background:#fff;border:1px solid var(--accent);border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.2);white-space:nowrap;z-index:40;cursor:default}
 .field-toolbar.field-toolbar--below{bottom:auto;top:calc(100% + 6px)}
 .field-toolbar.field-toolbar--align-left{left:0;right:auto;transform:none}
@@ -9144,7 +9488,7 @@ input:disabled,select:disabled,textarea:disabled{background:#f0ebe0;color:#999;c
 .field-toolbar button:hover,.field-toolbar button:focus{background:#efe7f7;border-color:var(--accent);outline:none}
 .field-toolbar button[data-fact="delete"]{color:#a11;border-color:#e3b9b9}
 .field-toolbar .field-toolbar-sep{width:1px;height:18px;background:#e0d8e8;margin:0 2px}
-.field:hover .field-resize-corner,.field.selected .field-resize-corner{display:block}
+.field:hover .field-resize-corner,.field.selected .field-resize-corner,.field:hover .field-resize-handle,.field.selected .field-resize-handle{display:block}
 .field-content{width:100%;height:100%;white-space:pre-wrap;overflow:hidden;word-break:break-all;display:flex}
 .field-content.anchor-tl{justify-content:flex-start;align-items:flex-start}
 .field-content.anchor-tc{justify-content:center;align-items:flex-start}
@@ -9641,7 +9985,17 @@ body{background:#fff;overflow:visible}
 .magic-oneshot-guard-label{position:absolute;left:0;top:-18px;max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:rgba(255,255,255,.88);border:1px dashed rgba(96,96,110,.35);font-size:11px;line-height:1.2;padding:2px 5px;color:#5d5d66}
 .magic-oneshot-field-box.selected{border-color:var(--warn);background:rgba(196,77,46,.10)}
 .magic-oneshot-field-label{position:absolute;left:0;top:-18px;max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:#fff;border:1px solid rgba(113,72,158,.28);font-size:11px;line-height:1.2;padding:2px 5px;color:#3b2a4d;box-shadow:0 3px 10px rgba(45,31,61,.08)}
-.magic-oneshot-resize-handle{position:absolute;right:-5px;bottom:-5px;width:10px;height:10px;background:var(--accent);border:1px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.24);cursor:nwse-resize}
+/* v41-2: かんたん印字の枠も四辺・四隅でリサイズできるようにする。SEは常時表示、他は選択/ホバー時に表示。 */
+.magic-oneshot-resize-handle{position:absolute;width:10px;height:10px;background:var(--accent);border:1px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.24);display:none;touch-action:none}
+.magic-oneshot-resize-handle.dir-se{right:-5px;bottom:-5px;cursor:nwse-resize;display:block}
+.magic-oneshot-resize-handle.dir-nw{left:-5px;top:-5px;cursor:nwse-resize}
+.magic-oneshot-resize-handle.dir-n{left:50%;top:-5px;margin-left:-5px;cursor:ns-resize}
+.magic-oneshot-resize-handle.dir-ne{right:-5px;top:-5px;cursor:nesw-resize}
+.magic-oneshot-resize-handle.dir-e{right:-5px;top:50%;margin-top:-5px;cursor:ew-resize}
+.magic-oneshot-resize-handle.dir-s{left:50%;bottom:-5px;margin-left:-5px;cursor:ns-resize}
+.magic-oneshot-resize-handle.dir-sw{left:-5px;bottom:-5px;cursor:nesw-resize}
+.magic-oneshot-resize-handle.dir-w{left:-5px;top:50%;margin-top:-5px;cursor:ew-resize}
+.magic-oneshot-field-box:hover .magic-oneshot-resize-handle,.magic-oneshot-field-box.selected .magic-oneshot-resize-handle{display:block}
 #magicOneShotDirectEditStatus{margin-top:4px;color:#5d4a70}
 
 
@@ -10149,6 +10503,7 @@ body{background:#fff;overflow:visible}
               <div style="display:flex;gap:8px;flex-wrap:wrap">
                 <button class="btn" id="btnTestSample">サンプル宛先で1枚</button>
                 <button class="btn" id="btnTestFirst">キュー1件目で</button>
+                <button class="btn" id="btnTestWorst" title="文字あふれ・縮小が最も大きい宛先を自動で選んでテスト印刷します">最長・あふれ宛先で</button>
                 <button class="btn ghost" id="btnTestCross">十字マーク・罫線</button>
                 <button class="btn warn" id="btnTestSampleA4Calibration">A4補正ありサンプル</button>
                 <button class="btn warn" id="btnTestCrossA4Calibration">A4補正あり十字</button>
@@ -16036,6 +16391,32 @@ function applyOneShotFieldResize(field, dwMm, dhMm, tpl){
   field.h = round1(clamp(num(field.h,1) + num(dhMm,0), MIN_FIELD_SIZE_MM, maxH));
   return field;
 }
+/* v41-2: 8方向（n/s/e/w/ne/nw/se/sw）の枠リサイズ。
+   start（ドラッグ開始時のfield）を基準に、対辺を固定して指定辺だけを動かす。
+   決定論的mm計算・0.1mm丸め・紙面内クランプはモデル層で完結させる。 */
+function applyOneShotFieldResizeDir(field, dir, dxMm, dyMm, tpl, start){
+  if(!field || !tpl) return null;
+  const s = start || field;
+  const sx = num(s.x,0), sy = num(s.y,0);
+  const sw = Math.max(MIN_FIELD_SIZE_MM, num(s.w,1)), sh = Math.max(MIN_FIELD_SIZE_MM, num(s.h,1));
+  const right = sx + sw, bottom = sy + sh;
+  const tplW = num(tpl.w,0), tplH = num(tpl.h,0);
+  const d = String(dir || 'se');
+  let x = sx, y = sy, w = sw, h = sh;
+  if(d.includes('e')) w = clamp(sw + num(dxMm,0), MIN_FIELD_SIZE_MM, Math.max(MIN_FIELD_SIZE_MM, tplW - sx));
+  if(d.includes('s')) h = clamp(sh + num(dyMm,0), MIN_FIELD_SIZE_MM, Math.max(MIN_FIELD_SIZE_MM, tplH - sy));
+  if(d.includes('w')){
+    x = clamp(sx + num(dxMm,0), 0, right - MIN_FIELD_SIZE_MM);
+    w = right - x;
+  }
+  if(d.includes('n')){
+    y = clamp(sy + num(dyMm,0), 0, bottom - MIN_FIELD_SIZE_MM);
+    h = bottom - y;
+  }
+  field.x = round1(x); field.y = round1(y);
+  field.w = round1(w); field.h = round1(h);
+  return field;
+}
 function clientPoint(e){
   const p = (e && e.touches && e.touches[0]) || (e && e.changedTouches && e.changedTouches[0]) || e || {};
   return {x:num(p.clientX,0), y:num(p.clientY,0)};
@@ -16064,6 +16445,7 @@ const DirectEditModelApi = Object.freeze({
   fieldLabel,
   applyOneShotFieldMove,
   applyOneShotFieldResize,
+  applyOneShotFieldResizeDir,
   clientPoint,
   mmPerPxFromRect,
   mmPerPx
@@ -16183,6 +16565,14 @@ function applyOneShotFieldMove(field, dxMm, dyMm, tpl){
 function applyOneShotFieldResize(field, dwMm, dhMm, tpl){
   return getDirectEditModel().applyOneShotFieldResize(field, dwMm, dhMm, tpl);
 }
+function applyOneShotFieldResizeDir(field, dir, dxMm, dyMm, tpl, start){
+  const model = getDirectEditModel();
+  // v41-2: 旧モデル（Dir未対応）読込時は従来の右下リサイズへフォールバックする。
+  if(model && typeof model.applyOneShotFieldResizeDir === 'function'){
+    return model.applyOneShotFieldResizeDir(field, dir, dxMm, dyMm, tpl, start);
+  }
+  return model.applyOneShotFieldResize(field, dxMm, dyMm, tpl);
+}
 function clientPoint(e){
   return getDirectEditModel().clientPoint(e);
 }
@@ -16227,9 +16617,12 @@ function onDragMove(e){
   const dx = (pt.x - s.startClient.x) * s.mmPerPx.x;
   const dy = (pt.y - s.startClient.y) * s.mmPerPx.y;
   if(s.kind === 'resize'){
+    // v41-2: ドラッグ開始時の枠を基準に、つかんだ辺・角だけを動かす。
+    s.field.x = s.startField.x;
+    s.field.y = s.startField.y;
     s.field.w = s.startField.w;
     s.field.h = s.startField.h;
-    applyOneShotFieldResize(s.field, dx, dy, s.tpl);
+    applyOneShotFieldResizeDir(s.field, s.resizeDir || 'se', dx, dy, s.tpl, s.startField);
   }else{
     s.field.x = s.startField.x;
     s.field.y = s.startField.y;
@@ -16237,7 +16630,7 @@ function onDragMove(e){
   }
   updateActiveDragBoxStyle(s.field, s.tpl);
 }
-function startDrag(e, fieldId, kind){
+function startDrag(e, fieldId, kind, resizeDir){
   const tpl = getTpl();
   const env = global.document && global.document.getElementById('magicOneShotEnvelope');
   if(!tpl || !env || tpl.locked) return false;
@@ -16250,6 +16643,7 @@ function startDrag(e, fieldId, kind){
   selectedFieldId = fieldId;
   dragSession = {
     kind:kind === 'resize' ? 'resize' : 'move',
+    resizeDir:String(resizeDir || 'se'),
     tpl:tpl,
     field:field,
     startField:JSON.parse(JSON.stringify(field)),
@@ -16378,7 +16772,9 @@ function renderMagicOneShotEditOverlay(){
     return '<div class="magic-oneshot-field-box '+(selected?'selected':'')+'" data-magic-field-id="'+esc(f.id)+'" role="button" tabindex="0" aria-label="'+esc(fieldLabel(f))+'を移動またはサイズ変更" style="left:'+st.left+';top:'+st.top+';width:'+st.width+';height:'+st.height+'">'+
       '<span class="magic-oneshot-field-label">'+esc(fieldLabel(f))+'</span>'+
       (selected ? renderMagicOneShotMiniToolbar(f, tpl) : '')+
-      '<span class="magic-oneshot-resize-handle" data-magic-resize-id="'+esc(f.id)+'"></span>'+
+      ['nw','n','ne','e','se','s','sw','w'].map(function(dir){
+        return '<span class="magic-oneshot-resize-handle dir-'+dir+'" data-magic-resize-id="'+esc(f.id)+'" data-magic-resize-dir="'+dir+'"></span>';
+      }).join('')+
     '</div>';
   }).join('');
   // v40-25: image/zip等の非直接編集fieldも淡く表示し、クリック配置で重ねられない既存領域を可視化する。
@@ -16411,8 +16807,9 @@ function renderMagicOneShotEditOverlay(){
   });
   Array.from(layer.querySelectorAll('[data-magic-resize-id]')).forEach(function(el){
     const id = el.getAttribute('data-magic-resize-id');
-    el.addEventListener('mousedown', function(e){ startDrag(e, id, 'resize'); });
-    el.addEventListener('touchstart', function(e){ startDrag(e, id, 'resize'); }, {passive:false});
+    const dir = el.getAttribute('data-magic-resize-dir') || 'se';
+    el.addEventListener('mousedown', function(e){ startDrag(e, id, 'resize', dir); });
+    el.addEventListener('touchstart', function(e){ startDrag(e, id, 'resize', dir); }, {passive:false});
   });
   updateMagicOneShotDirectEditStatus(tpl);
   return true;

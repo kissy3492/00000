@@ -1,0 +1,72 @@
+@echo off
+rem ============================================================================
+rem  Python(embeddable版) 実機スモークテスト  Phase B  v1.0
+rem  事前準備: このbatと同じ場所に python フォルダ（embeddable展開物）を置く
+rem    例)  この場所\python\python.exe が存在する状態
+rem  外部通信なし・管理者権限不要
+rem ============================================================================
+setlocal enabledelayedexpansion
+set "PY=%~dp0python\python.exe"
+set "REPORT=%~dp0python_smoke_result.txt"
+set NG=0
+
+echo ============================================================ > "%REPORT%"
+echo  Python実機スモークテスト結果 (Phase B) >> "%REPORT%"
+echo  実行日時: %date% %time% >> "%REPORT%"
+echo ============================================================ >> "%REPORT%"
+
+echo.
+echo ===== Python embeddable 実機スモークテスト Phase B =====
+echo.
+
+if not exist "%PY%" (
+  echo [NG] %PY% が見つかりません。
+  echo      python embeddable zip を「python」フォルダ名で展開して置いてください。
+  echo [NG] python\python.exe なし >> "%REPORT%"
+  pause
+  exit /b 1
+)
+
+echo [1] 起動・バージョン
+"%PY%" -c "import sys; print('PYTHON OK', sys.version)" >> "%REPORT%" 2>&1
+if !errorlevel! equ 0 (echo   [OK] 起動可) else (echo   [NG] 起動不可 ^(実行制御でブロックの可能性^) & set /a NG+=1)
+
+echo [2] DLL読込（ctypes）
+"%PY%" -c "import ctypes; print('CTYPES OK')" >> "%REPORT%" 2>&1
+if !errorlevel! equ 0 (echo   [OK]) else (echo   [NG] & set /a NG+=1)
+
+echo [3] localhostソケット（レビューUI用）
+"%PY%" -c "import socket;s=socket.socket();s.bind(('127.0.0.1',0));print('SOCKET OK port',s.getsockname()[1]);s.close()" >> "%REPORT%" 2>&1
+if !errorlevel! equ 0 (echo   [OK]) else (echo   [NG] & set /a NG+=1)
+
+echo [4] ファイルI/O・zlib
+"%PY%" -c "import zlib,tempfile,os;p=tempfile.mktemp();open(p,'wb').write(zlib.compress(b'x'*1000));os.remove(p);print('IO/ZLIB OK')" >> "%REPORT%" 2>&1
+if !errorlevel! equ 0 (echo   [OK]) else (echo   [NG] & set /a NG+=1)
+
+echo [5] multiprocessing（並列OCRの前提）
+"%PY%" -c "import multiprocessing as m; print('MP OK cpu=', m.cpu_count())" >> "%REPORT%" 2>&1
+if !errorlevel! equ 0 (echo   [OK]) else (echo   [NG] & set /a NG+=1)
+
+echo [6] site-packages（依存導入後の確認・任意）
+"%PY%" -c "import numpy; print('NUMPY OK', numpy.__version__)" >> "%REPORT%" 2>&1
+if !errorlevel! equ 0 (
+  echo   [OK] numpy 読込可
+  "%PY%" -c "import cv2; print('OPENCV OK', cv2.__version__)" >> "%REPORT%" 2>&1
+  if !errorlevel! equ 0 (echo   [OK] OpenCV 読込可) else (echo   [--] OpenCV 未導入)
+) else (
+  echo   [--] numpy 未導入（依存同梱前なら正常。Phase Cで導入）
+)
+
+echo.
+echo ============================================================
+if !NG! equ 0 (
+  echo  総合: 合格。Python路線で本開発に進めます。
+  echo 総合: 合格 >> "%REPORT%"
+) else (
+  echo  総合: !NG! 件失敗。結果ファイルのエラー内容を開発担当に共有してください。
+  echo 総合: !NG! 件失敗 >> "%REPORT%"
+)
+echo  結果ファイル: %REPORT%
+echo.
+pause
+endlocal
